@@ -14,8 +14,8 @@ import requests as req_lib
 
 PORT = int(os.environ.get("PORT", 8002))
 PROC_DIM = 900
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
 print(f"rembg-service ready on port {PORT}")
 
 
