@@ -56,7 +56,7 @@ class Handler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(length)
                 req = json.loads(body)
-                image_url = req["image_url"].strip()
+                image_url = ''.join(c for c in req["image_url"] if ord(c) >= 32)
 
                 with urllib.request.urlopen(image_url, timeout=20) as r:
                     input_data = r.read()
