@@ -115,27 +115,85 @@ def remove_bg_from_bytes(image_data: bytes) -> bytes:
 
 # ── Background compositing ────────────────────────────────────────────────────
 
-def make_background(w: int, h: int, is_auto: bool) -> Image.Image:
-    pixels = np.zeros((h, w, 3), dtype=np.uint8)
-    for y in range(h):
-        t = y / h
-        if is_auto:
-            r_v = int(13 + t * 5)
-            g_v = int(13 + t * 5)
-            b_v = max(5, int(26 - t * 21))
-            pixels[y, :] = [r_v, g_v, b_v]
-        else:
-            cx_f = np.arange(w, dtype=np.float32)
-            cy_f = y
-            dx = (cx_f - w / 2) / (w / 2)
-            dy = (cy_f - h * 0.3) / h
-            d = np.clip(np.sqrt(dx**2 + dy**2) / 0.65, 0, 1)
-            v = np.clip(255 - d * 30, 220, 255).astype(np.uint8)
-            b_arr = np.clip(v - d * 10 + 10, 215, 255).astype(np.uint8)
-            pixels[y, :, 0] = v
-            pixels[y, :, 1] = v
-            pixels[y, :, 2] = b_arr
-    return Image.fromarray(pixels, 'RGB')
+def make_showroom(w: int, h: int) -> Image.Image:
+    """zyAI dark showroom: wall + reflective floor + spotlight + grid + branding."""
+    from PIL import ImageDraw, ImageFont
+
+    Y, X = np.mgrid[0:h, 0:w].astype(np.float32)
+    Xn = (X - w / 2) / (w / 2)   # -1..1
+    Yn = Y / h                     #  0..1
+
+    wall_frac = 0.60
+    wall_h = int(h * wall_frac)
+
+    # ── Wall: dark navy + top-center spotlight ────────────────────────────────
+    spot = np.exp(-(Xn ** 2 * 2.5 + (Yn - 0.05) ** 2 * 8)) * 0.55
+    wall_r = np.clip(6  + spot * 40,  0, 255)
+    wall_g = np.clip(6  + spot * 32,  0, 255)
+    wall_b = np.clip(18 + spot * 80,  0, 255)
+
+    # ── Floor: very dark + center reflection glow ─────────────────────────────
+    floor_t = np.clip((Y - wall_h) / max(h - wall_h, 1), 0, 1)
+    floor_glow = np.exp(-Xn ** 2 * 3) * np.exp(-floor_t * 4) * 0.6
+    floor_r = np.clip(4  + floor_glow * 35,  0, 255)
+    floor_g = np.clip(4  + floor_glow * 28,  0, 255)
+    floor_b = np.clip(10 + floor_glow * 70,  0, 255)
+
+    wall_mask  = (Y < wall_h).astype(np.float32)
+    floor_mask = 1 - wall_mask
+
+    pix = np.zeros((h, w, 3), dtype=np.uint8)
+    pix[:, :, 0] = np.clip(wall_r * wall_mask + floor_r * floor_mask, 0, 255).astype(np.uint8)
+    pix[:, :, 1] = np.clip(wall_g * wall_mask + floor_g * floor_mask, 0, 255).astype(np.uint8)
+    pix[:, :, 2] = np.clip(wall_b * wall_mask + floor_b * floor_mask, 0, 255).astype(np.uint8)
+
+    img = Image.fromarray(pix, 'RGB').convert('RGBA')
+    draw = ImageDraw.Draw(img)
+
+    # ── Wall/floor junction glow line ─────────────────────────────────────────
+    for dy in range(-2, 3):
+        alpha = max(0, 120 - abs(dy) * 40)
+        draw.line([(0, wall_h + dy), (w, wall_h + dy)],
+                  fill=(80, 120, 255, alpha))
+
+    # ── Floor perspective grid ─────────────────────────────────────────────────
+    vp_x, vp_y = w // 2, wall_h
+    grid_color = (40, 60, 160, 35)
+    # Horizontal lines
+    for i in range(1, 7):
+        fy = wall_h + int((h - wall_h) * i / 6)
+        draw.line([(0, fy), (w, fy)], fill=grid_color, width=1)
+    # Vanishing lines
+    for x_end in range(-w, w * 2, w // 7):
+        draw.line([(vp_x, vp_y), (x_end, h)], fill=grid_color, width=1)
+
+    # ── zyAI.ro floor branding ────────────────────────────────────────────────
+    brand_font_size = max(20, int(w * 0.06))
+    try:
+        brand_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", brand_font_size)
+    except Exception:
+        brand_font = ImageFont.load_default()
+
+    brand_text = "zyAI.ro"
+    bb = draw.textbbox((0, 0), brand_text, font=brand_font)
+    bw, bh = bb[2] - bb[0], bb[3] - bb[1]
+    bx = (w - bw) // 2
+    by = wall_h + int((h - wall_h) * 0.68)
+    draw.text((bx, by), brand_text, font=brand_font, fill=(100, 140, 255, 40))
+
+    return img
+
+
+def make_studio(w: int, h: int) -> Image.Image:
+    """White studio background."""
+    Y, X = np.mgrid[0:h, 0:w].astype(np.float32)
+    Xn = (X - w / 2) / (w / 2)
+    Yn = (Y - h * 0.3) / h
+    d = np.clip(np.sqrt(Xn ** 2 + Yn ** 2) / 0.65, 0, 1)
+    v = np.clip(255 - d * 28, 220, 255).astype(np.uint8)
+    b = np.clip(v.astype(np.int32) - (d * 8).astype(np.int32) + 8, 215, 255).astype(np.uint8)
+    pix = np.stack([v, v, b], axis=2)
+    return Image.fromarray(pix, 'RGB')
 
 
 def add_watermark(img: Image.Image) -> Image.Image:
@@ -163,33 +221,8 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     subject = Image.open(io.BytesIO(subject_png)).convert('RGBA')
     sw, sh = subject.size
     cat_lower = (category or '').lower()
-    # Default to auto (dark showroom) when no category or unknown — primary use case
     is_auto = not cat_lower or cat_lower == 'general' or 'auto' in cat_lower or cat_lower in ('vehicule', 'masini', 'cars')
-    bg = make_background(sw, sh, is_auto).convert('RGBA')
-
-    if is_auto:
-        # Elliptical podium with glowing rim
-        podium_y = int(sh * 0.75)
-        podium_w = int(sw * 0.85)
-        podium_h = int(sh * 0.07)
-        pd = np.zeros((podium_h, podium_w, 4), dtype=np.uint8)
-        for py in range(podium_h):
-            for px in range(podium_w):
-                ex = (px - podium_w / 2) / (podium_w / 2)
-                ey = (py - podium_h / 2) / (podium_h / 2)
-                d2 = ex*ex + ey*ey
-                if d2 <= 1:
-                    t = py / podium_h
-                    rim = max(0, 1 - d2 * 4)  # glow near edge
-                    base_b = int(106 + t*(48-106))
-                    pd[py, px] = [
-                        min(255, int(42 + t*(17-42)) + int(rim * 80)),
-                        min(255, int(42 + t*(17-42)) + int(rim * 80)),
-                        min(255, base_b + int(rim * 120)),
-                        min(255, 180 + int(rim * 75))
-                    ]
-        podium = Image.fromarray(pd, 'RGBA')
-        bg.paste(podium, (int((sw - podium_w) / 2), podium_y - podium_h // 2), podium)
+    bg = make_showroom(sw, sh) if is_auto else make_studio(sw, sh).convert('RGBA')
 
     bg.paste(subject, (0, 0), subject)
     result = add_watermark(bg)
