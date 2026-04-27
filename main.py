@@ -121,11 +121,33 @@ def make_background(w: int, h: int, is_auto: bool) -> Image.Image:
     return Image.fromarray(pixels, 'RGB')
 
 
+def add_watermark(img: Image.Image) -> Image.Image:
+    from PIL import ImageDraw, ImageFont
+    draw = ImageDraw.Draw(img)
+    w, h = img.size
+    font_size = max(14, int(h * 0.03))
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+    except Exception:
+        font = ImageFont.load_default()
+    text = "zyAI.ro"
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    x = w - tw - int(w * 0.025)
+    y = h - th - int(h * 0.025)
+    # Shadow
+    draw.text((x + 1, y + 1), text, font=font, fill=(0, 0, 0, 100))
+    # Main text
+    draw.text((x, y), text, font=font, fill=(255, 255, 255, 180))
+    return img
+
+
 def composite_image(subject_png: bytes, category: str) -> bytes:
     subject = Image.open(io.BytesIO(subject_png)).convert('RGBA')
     sw, sh = subject.size
     cat_lower = (category or '').lower()
-    is_auto = 'auto' in cat_lower or cat_lower in ('vehicule', 'masini', 'cars')
+    # Default to auto (dark showroom) when no category or unknown — primary use case
+    is_auto = not cat_lower or cat_lower == 'general' or 'auto' in cat_lower or cat_lower in ('vehicule', 'masini', 'cars')
     bg = make_background(sw, sh, is_auto).convert('RGBA')
 
     if is_auto:
@@ -133,7 +155,6 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         podium_y = int(sh * 0.72)
         podium_w = int(sw * 0.7)
         podium_h = int(sh * 0.06)
-        podium = Image.new('RGBA', (podium_w, podium_h), (0, 0, 0, 0))
         pd = np.zeros((podium_h, podium_w, 4), dtype=np.uint8)
         for py in range(podium_h):
             for px in range(podium_w):
@@ -146,8 +167,9 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         bg.paste(podium, (int((sw - podium_w) / 2), podium_y - podium_h // 2), podium)
 
     bg.paste(subject, (0, 0), subject)
+    result = add_watermark(bg)
     out = io.BytesIO()
-    bg.convert('RGB').save(out, format='WEBP', quality=82)
+    result.convert('RGB').save(out, format='WEBP', quality=82)
     return out.getvalue()
 
 
