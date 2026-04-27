@@ -162,11 +162,13 @@ def upload_to_supabase(data: bytes, content_type: str) -> str:
     url = f"{SUPABASE_URL}/storage/v1/object/listings/{path}"
     r = req_lib.post(url, headers={
         'Authorization': f'Bearer {SUPABASE_KEY}',
+        'apikey': SUPABASE_KEY,
         'Content-Type': content_type,
-        'x-upsert': 'false',
-        'Cache-Control': '31536000',
+        'x-upsert': 'true',
+        'cache-control': 'max-age=31536000',
     }, data=data, timeout=30)
-    r.raise_for_status()
+    if not r.ok:
+        raise ValueError(f"Supabase upload failed {r.status_code}: {r.text[:200]}")
     return f"{SUPABASE_URL}/storage/v1/object/public/listings/{path}"
 
 
