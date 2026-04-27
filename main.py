@@ -13,7 +13,7 @@ import io
 import requests as req_lib
 
 PORT = int(os.environ.get("PORT", 8002))
-PROC_DIM = 900
+PROC_DIM = 640
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
 print(f"rembg-service ready on port {PORT}")
@@ -65,7 +65,7 @@ def grabcut_mask(img):
     mask = np.zeros((h, w), np.uint8)
     bgd, fgd = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
     mx, my = int(w * 0.06), int(h * 0.06)
-    cv2.grabCut(img_enh, mask, (mx, my, w - 2*mx, h - 2*my), bgd, fgd, 5, cv2.GC_INIT_WITH_RECT)
+    cv2.grabCut(img_enh, mask, (mx, my, w - 2*mx, h - 2*my), bgd, fgd, 3, cv2.GC_INIT_WITH_RECT)
     alpha = np.where((mask == 2) | (mask == 0), 0, 255).astype(np.uint8)
     k1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (4, 4))
@@ -124,7 +124,8 @@ def make_background(w: int, h: int, is_auto: bool) -> Image.Image:
 def composite_image(subject_png: bytes, category: str) -> bytes:
     subject = Image.open(io.BytesIO(subject_png)).convert('RGBA')
     sw, sh = subject.size
-    is_auto = (category or '').lower() == 'auto'
+    cat_lower = (category or '').lower()
+    is_auto = 'auto' in cat_lower or cat_lower in ('vehicule', 'masini', 'cars')
     bg = make_background(sw, sh, is_auto).convert('RGBA')
 
     if is_auto:
