@@ -14,6 +14,15 @@ import requests as req_lib
 
 PORT = int(os.environ.get("PORT", 8002))
 PROC_DIM = 640
+
+# Try loading rembg with silueta model (44MB, lightweight neural network)
+_rembg_session = None
+try:
+    from rembg import new_session, remove as rembg_remove
+    _rembg_session = new_session('silueta')
+    print("rembg silueta model loaded OK")
+except Exception as e:
+    print(f"rembg not available, using GrabCut fallback: {e}")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
 print(f"rembg-service ready on port {PORT}")
@@ -78,6 +87,14 @@ def grabcut_mask(img):
 
 
 def remove_bg_from_bytes(image_data: bytes) -> bytes:
+    # Use rembg neural model if available
+    if _rembg_session is not None:
+        try:
+            return rembg_remove(image_data, session=_rembg_session)
+        except Exception as e:
+            print(f"rembg failed, falling back to GrabCut: {e}")
+
+    # GrabCut fallback
     nparr = np.frombuffer(image_data, np.uint8)
     orig = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if orig is None:
@@ -151,18 +168,26 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     bg = make_background(sw, sh, is_auto).convert('RGBA')
 
     if is_auto:
-        # Add elliptical podium
-        podium_y = int(sh * 0.72)
-        podium_w = int(sw * 0.7)
-        podium_h = int(sh * 0.06)
+        # Elliptical podium with glowing rim
+        podium_y = int(sh * 0.75)
+        podium_w = int(sw * 0.85)
+        podium_h = int(sh * 0.07)
         pd = np.zeros((podium_h, podium_w, 4), dtype=np.uint8)
         for py in range(podium_h):
             for px in range(podium_w):
                 ex = (px - podium_w / 2) / (podium_w / 2)
                 ey = (py - podium_h / 2) / (podium_h / 2)
-                if ex*ex + ey*ey <= 1:
+                d2 = ex*ex + ey*ey
+                if d2 <= 1:
                     t = py / podium_h
-                    pd[py, px] = [int(42 + t*(17-42)), int(42 + t*(17-42)), int(106 + t*(48-106)), 200]
+                    rim = max(0, 1 - d2 * 4)  # glow near edge
+                    base_b = int(106 + t*(48-106))
+                    pd[py, px] = [
+                        min(255, int(42 + t*(17-42)) + int(rim * 80)),
+                        min(255, int(42 + t*(17-42)) + int(rim * 80)),
+                        min(255, base_b + int(rim * 120)),
+                        min(255, 180 + int(rim * 75))
+                    ]
         podium = Image.fromarray(pd, 'RGBA')
         bg.paste(podium, (int((sw - podium_w) / 2), podium_y - podium_h // 2), podium)
 
