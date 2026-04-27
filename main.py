@@ -277,11 +277,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
+            model = "rembg-silueta" if _rembg_session else "grabcut-fallback"
+            body = json.dumps({"ok": True, "model": model}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
             self.end_headers()
-            self.wfile.write(b'{"ok":true}')
+            self.wfile.write(body)
 
     def do_POST(self):
         try:
