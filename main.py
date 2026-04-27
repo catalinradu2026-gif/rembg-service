@@ -15,14 +15,6 @@ import requests as req_lib
 PORT = int(os.environ.get("PORT", 8002))
 PROC_DIM = 640
 
-# Try loading rembg with silueta model (44MB, lightweight neural network)
-_rembg_session = None
-try:
-    from rembg import new_session, remove as rembg_remove
-    _rembg_session = new_session('silueta')
-    print("rembg silueta model loaded OK")
-except Exception as e:
-    print(f"rembg not available, using GrabCut fallback: {e}")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
 print(f"rembg-service ready on port {PORT}")
@@ -87,14 +79,6 @@ def grabcut_mask(img):
 
 
 def remove_bg_from_bytes(image_data: bytes) -> bytes:
-    # Use rembg neural model if available
-    if _rembg_session is not None:
-        try:
-            return rembg_remove(image_data, session=_rembg_session)
-        except Exception as e:
-            print(f"rembg failed, falling back to GrabCut: {e}")
-
-    # GrabCut fallback
     nparr = np.frombuffer(image_data, np.uint8)
     orig = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if orig is None:
@@ -323,8 +307,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            model = "rembg-silueta" if _rembg_session else "grabcut-fallback"
-            body = json.dumps({"ok": True, "model": model}).encode()
+                    body = json.dumps({"ok": True, "model": "grabcut"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
