@@ -100,96 +100,75 @@ def remove_bg_from_bytes(image_data: bytes) -> bytes:
 # ── Background compositing ────────────────────────────────────────────────────
 
 def make_showroom(w: int, h: int) -> Image.Image:
-    """zyAI WOW showroom: dramatic spotlight, neon floor, reflection glow, perspective grid."""
-    from PIL import ImageDraw, ImageFont, ImageFilter
+    """zyAI WOW showroom — vectorized numpy, low memory."""
+    from PIL import ImageDraw, ImageFont
 
-    Y, X = np.mgrid[0:h, 0:w].astype(np.float32)
-    Xn = (X - w / 2) / (w / 2)
-    Yn = Y / h
-
+    # Work at half resolution then upscale for speed + memory
+    hw, hh = max(w // 2, 1), max(h // 2, 1)
+    Y, X = np.mgrid[0:hh, 0:hw].astype(np.float32)
+    Xn = (X - hw / 2) / (hw / 2)
+    Yn = Y / hh
     wall_frac = 0.58
+    wall_h_s = int(hh * wall_frac)
+
+    pix = np.zeros((hh, hw, 3), dtype=np.float32)
+
+    # Spotlight
+    spot = np.exp(-(Xn**2 * 10 + (Yn * 0.75)**2 * 2)) * 85 + \
+           np.exp(-(Xn**2 * 2   + (Yn - 0.05)**2 * 5)) * 30
+    # Side accents
+    left  = np.exp(-((Xn + 1.1)**2 * 2 + Yn**2 * 5)) * 35
+    right = np.exp(-((Xn - 1.1)**2 * 2 + Yn**2 * 5)) * 35
+
+    wm = (Y < wall_h_s).astype(np.float32)
+    pix[:,:,0] += (spot * 0.5 + left * 0.5 + right * 0.5) * wm
+    pix[:,:,1] += (spot * 0.4 + left * 0.25 + right * 0.25) * wm
+    pix[:,:,2] += (spot * 0.95 + left * 0.9 + right * 0.9) * wm
+
+    fm = 1 - wm
+    ft = np.clip((Y - wall_h_s) / max(hh - wall_h_s, 1), 0, 1)
+    refl = np.exp(-Xn**2 * 5) * np.exp(-ft * 5) * 60
+    pix[:,:,2] += refl * fm
+    pix[:,:,0] += refl * 0.3 * fm
+
+    vig = np.clip(1 - (Xn**2 * 0.55 + (Yn - 0.45)**2 * 0.35), 0.07, 1)
+    pix *= vig[:,:,np.newaxis]
+
+    # Upscale to full resolution
+    small = Image.fromarray(np.clip(pix, 0, 255).astype(np.uint8), 'RGB')
+    img = small.resize((w, h), Image.BILINEAR).convert('RGBA')
+    draw = ImageDraw.Draw(img)
     wall_h = int(h * wall_frac)
 
-    # ── Base: pitch black ─────────────────────────────────────────────────────
-    pix = np.zeros((h, w, 3), dtype=np.float32)
+    # Glowing horizon line
+    for dy in range(-3, 4):
+        a = max(0, 190 - abs(dy) * 55)
+        draw.line([(0, wall_h + dy), (w, wall_h + dy)], fill=(60, 110, 255, a))
 
-    # ── Main spotlight: tight white-blue beam from top center ─────────────────
-    spot_tight = np.exp(-(Xn ** 2 * 12 + (Yn * 0.8) ** 2 * 2)) * 90
-    spot_wide  = np.exp(-(Xn ** 2 * 2.5 + (Yn - 0.05) ** 2 * 5)) * 35
-    spot = spot_tight + spot_wide
+    # Neon side lines
+    for dx in [int(w * 0.04), int(w * 0.96)]:
+        draw.line([(dx, int(wall_h * 0.08)), (dx, wall_h)], fill=(70, 50, 240, 90), width=2)
 
-    # ── Side accent lights: purple-blue from upper left & right ──────────────
-    left  = np.exp(-((Xn + 1.1) ** 2 * 1.8 + (Yn - 0.15) ** 2 * 4)) * 40
-    right = np.exp(-((Xn - 1.1) ** 2 * 1.8 + (Yn - 0.15) ** 2 * 4)) * 40
+    # Floor grid
+    vp = w // 2
+    for i in range(1, 8):
+        fy = wall_h + int((h - wall_h) * (i / 7)**0.6)
+        draw.line([(0, fy), (w, fy)], fill=(45, 75, 195, max(8, 50 - i * 6)))
+    for xp in range(-120, 121, 20):
+        draw.line([(vp, wall_h), (vp + int(w * xp / 100), h)], fill=(38, 62, 185, 25))
 
-    # ── Wall ─────────────────────────────────────────────────────────────────
-    wall_m = (Y < wall_h).astype(np.float32)
-    pix[:,:,0] += (spot * 0.55 + left * 0.6 + right * 0.5) * wall_m
-    pix[:,:,1] += (spot * 0.45 + left * 0.3 + right * 0.3) * wall_m
-    pix[:,:,2] += (spot * 1.0  + left * 1.0 + right * 1.0) * wall_m
-
-    # ── Floor: dark with strong center glow (reflection) ─────────────────────
-    floor_m = 1 - wall_m
-    ft = np.clip((Y - wall_h) / max(h - wall_h, 1), 0, 1)
-    refl = np.exp(-Xn ** 2 * 5) * np.exp(-ft * 6) * 70
-    pix[:,:,0] += (refl * 0.4) * floor_m
-    pix[:,:,1] += (refl * 0.3) * floor_m
-    pix[:,:,2] += (refl * 1.0) * floor_m
-
-    # ── Vignette: dark corners ────────────────────────────────────────────────
-    vig = np.clip(1 - (Xn ** 2 * 0.6 + (Yn - 0.45) ** 2 * 0.4), 0.08, 1)
-    pix *= vig[:, :, np.newaxis]
-
-    img = Image.fromarray(np.clip(pix, 0, 255).astype(np.uint8), 'RGB').convert('RGBA')
-    draw = ImageDraw.Draw(img)
-
-    # ── Light beam cone (soft triangle from top) ──────────────────────────────
-    beam_img = Image.new('RGBA', (w, wall_h), (0, 0, 0, 0))
-    bd = ImageDraw.Draw(beam_img)
-    cx = w // 2
-    for rad in range(int(w * 0.45), 0, -3):
-        a = max(0, int(8 * (1 - rad / (w * 0.45))))
-        bd.polygon([(cx, 0), (cx - rad, wall_h), (cx + rad, wall_h)],
-                   fill=(140, 180, 255, a))
-    beam_blur = beam_img.filter(ImageFilter.GaussianBlur(radius=8))
-    img.alpha_composite(beam_blur, (0, 0))
-
-    # ── Glowing horizon line (wall meets floor) ───────────────────────────────
-    for dy in range(-4, 5):
-        a = max(0, 200 - abs(dy) * 50)
-        b_c = min(255, 200 + abs(dy) * 10)
-        draw.line([(0, wall_h + dy), (w, wall_h + dy)], fill=(60, 100, b_c, a))
-
-    # ── Neon side lines on wall ───────────────────────────────────────────────
-    for dx in [int(w * 0.05), int(w * 0.95)]:
-        for dy2 in range(-1, 2):
-            a2 = 80 - abs(dy2) * 30
-            draw.line([(dx + dy2, int(wall_h * 0.1)), (dx + dy2, wall_h)],
-                      fill=(80, 60, 255, a2), width=1)
-
-    # ── Floor perspective grid ────────────────────────────────────────────────
-    vp_x = w // 2
-    for i in range(1, 9):
-        fy = wall_h + int((h - wall_h) * (i / 8) ** 0.65)
-        a3 = max(10, 55 - i * 6)
-        draw.line([(0, fy), (w, fy)], fill=(50, 80, 200, a3), width=1)
-    for xp in range(-130, 131, 18):
-        xe = w // 2 + int(w * xp / 100)
-        draw.line([(vp_x, wall_h), (xe, h)], fill=(40, 65, 190, 28), width=1)
-
-    # ── zyAI.ro on floor (large, elegant) ────────────────────────────────────
-    fs = max(18, int(w * 0.055))
+    # zyAI.ro floor branding
+    fs = max(16, int(w * 0.052))
     try:
         fnt = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", fs)
     except Exception:
         fnt = ImageFont.load_default()
     txt = "zyAI.ro"
     bb = draw.textbbox((0, 0), txt, font=fnt)
-    bw2 = bb[2] - bb[0]
-    bx2 = (w - bw2) // 2
-    by2 = wall_h + int((h - wall_h) * 0.65)
-    draw.text((bx2 + 1, by2 + 1), txt, font=fnt, fill=(0, 0, 80, 60))
-    draw.text((bx2, by2), txt, font=fnt, fill=(100, 150, 255, 55))
+    bx = (w - (bb[2] - bb[0])) // 2
+    by = wall_h + int((h - wall_h) * 0.62)
+    draw.text((bx+1, by+1), txt, font=fnt, fill=(0, 0, 60, 50))
+    draw.text((bx, by), txt, font=fnt, fill=(110, 155, 255, 52))
 
     return img
 
@@ -229,7 +208,13 @@ def add_watermark(img: Image.Image) -> Image.Image:
 
 def composite_image(subject_png: bytes, category: str) -> bytes:
     subject = Image.open(io.BytesIO(subject_png)).convert('RGBA')
+    # Cap resolution to avoid OOM on large original images
+    MAX_SIDE = 1100
     sw, sh = subject.size
+    if max(sw, sh) > MAX_SIDE:
+        scale = MAX_SIDE / max(sw, sh)
+        sw, sh = int(sw * scale), int(sh * scale)
+        subject = subject.resize((sw, sh), Image.LANCZOS)
     cat_lower = (category or '').lower()
     is_auto = not cat_lower or cat_lower == 'general' or 'auto' in cat_lower or cat_lower in ('vehicule', 'masini', 'cars')
     bg = make_showroom(sw, sh) if is_auto else make_studio(sw, sh).convert('RGBA')
@@ -307,7 +292,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-                    body = json.dumps({"ok": True, "model": "grabcut"}).encode()
+            body = json.dumps({"ok": True, "model": "grabcut"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
