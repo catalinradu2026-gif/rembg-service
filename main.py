@@ -2,190 +2,262 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import os
 import urllib.request
+import urllib.parse
+import time
+import random
+import string
 import numpy as np
 import cv2
+from PIL import Image
+import io
+import requests as req_lib
 
 PORT = int(os.environ.get("PORT", 8002))
 PROC_DIM = 900
-print(f"OpenCV background removal service ready on port {PORT}")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+print(f"rembg-service ready on port {PORT}")
 
 
-def is_simple_background(img: np.ndarray) -> tuple[bool, np.ndarray]:
-    """Check if image has a uniform/studio background by sampling corners."""
+# ── Background removal ────────────────────────────────────────────────────────
+
+def is_simple_background(img):
     h, w = img.shape[:2]
-    margin = max(20, int(min(h, w) * 0.06))
-
-    corners = [
-        img[0:margin, 0:margin],
-        img[0:margin, w - margin:w],
-        img[h - margin:h, 0:margin],
-        img[h - margin:h, w - margin:w],
-    ]
-
-    samples = [c.reshape(-1, 3).astype(np.float32) for c in corners]
-    all_samples = np.vstack(samples)
-
-    mean_color = all_samples.mean(axis=0)
-    std_dev = all_samples.std(axis=0).mean()
-
-    # Low std = uniform background (studio/solid color)
-    is_simple = std_dev < 28
-    return is_simple, mean_color
+    m = max(20, int(min(h, w) * 0.06))
+    corners = [img[:m, :m], img[:m, w-m:], img[h-m:, :m], img[h-m:, w-m:]]
+    samples = np.vstack([c.reshape(-1, 3).astype(np.float32) for c in corners])
+    return samples.std(axis=0).mean() < 28, samples.mean(axis=0)
 
 
-def color_key_mask(img: np.ndarray, bg_color: np.ndarray, tolerance: float = 38) -> np.ndarray:
-    """Create alpha mask by color distance from background color."""
+def color_key_mask(img, bg_color, tol=38):
     h, w = img.shape[:2]
-    img_f = img.astype(np.float32)
-
-    diff = img_f - bg_color
+    diff = img.astype(np.float32) - bg_color
     dist = np.sqrt((diff ** 2).sum(axis=2))
-
-    # Soft transition: 0 at tolerance/2, 255 at tolerance
-    alpha = np.clip((dist - tolerance * 0.5) / (tolerance * 0.5) * 255, 0, 255).astype(np.uint8)
-
-    # Flood fill from all 4 corners to capture background connected to edges
-    margin = max(5, int(min(h, w) * 0.04))
-    flood_mask = np.zeros((h + 2, w + 2), np.uint8)
-    bg_thresh = np.where(dist < tolerance * 1.2, 0, 255).astype(np.uint8)
-
+    alpha = np.clip((dist - tol * 0.5) / (tol * 0.5) * 255, 0, 255).astype(np.uint8)
+    flood = np.zeros((h + 2, w + 2), np.uint8)
+    bg = np.where(dist < tol * 1.2, 0, 255).astype(np.uint8)
     for cy in [0, h // 2, h - 1]:
         for cx in [0, w // 2, w - 1]:
-            if bg_thresh[cy, cx] == 0:
-                cv2.floodFill(bg_thresh, flood_mask, (cx, cy), 128)
-
-    flood_bg = (bg_thresh == 128).astype(np.uint8) * 255
-    flood_bg_inv = 255 - flood_bg
-
-    # Combine: color distance + flood fill
+            if bg[cy, cx] == 0:
+                cv2.floodFill(bg, flood, (cx, cy), 128)
+    flood_bg_inv = 255 - (bg == 128).astype(np.uint8) * 255
     combined = cv2.bitwise_and(alpha, flood_bg_inv)
-
-    # Morphological cleanup
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-    combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel)
-    combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
-
-    # Largest connected component only
+    k1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    combined = cv2.morphologyEx(cv2.morphologyEx(combined, cv2.MORPH_CLOSE, k1), cv2.MORPH_OPEN, k2)
     _, thresh = cv2.threshold(combined, 127, 255, cv2.THRESH_BINARY)
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(thresh, connectivity=8)
-    if num_labels > 1:
-        largest = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
-        thresh = np.where(labels == largest, 255, 0).astype(np.uint8)
-
-    # Feather edges
-    feathered = cv2.GaussianBlur(thresh.astype(np.float32), (11, 11), 3)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(thresh, 8)
+    if n > 1:
+        thresh = np.where(labels == 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA]), 255, 0).astype(np.uint8)
+    blur = cv2.GaussianBlur(thresh.astype(np.float32), (11, 11), 3)
     border = cv2.dilate(thresh, np.ones((9, 9), np.uint8)) - cv2.erode(thresh, np.ones((9, 9), np.uint8))
     final = thresh.astype(np.float32)
-    final[border > 0] = feathered[border > 0]
-
+    final[border > 0] = blur[border > 0]
     return np.clip(final, 0, 255).astype(np.uint8)
 
 
-def grabcut_mask(img: np.ndarray) -> np.ndarray:
-    """GrabCut-based background removal for complex backgrounds."""
+def grabcut_mask(img):
     h, w = img.shape[:2]
-
-    # Enhance contrast
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    l = clahe.apply(l)
-    img_enh = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
-
+    img_enh = cv2.cvtColor(cv2.merge([clahe.apply(l), a, b]), cv2.COLOR_LAB2BGR)
     mask = np.zeros((h, w), np.uint8)
-    bgd = np.zeros((1, 65), np.float64)
-    fgd = np.zeros((1, 65), np.float64)
-    mx = int(w * 0.06)
-    my = int(h * 0.06)
-    rect = (mx, my, w - 2 * mx, h - 2 * my)
-    cv2.grabCut(img_enh, mask, rect, bgd, fgd, 5, cv2.GC_INIT_WITH_RECT)
-
+    bgd, fgd = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
+    mx, my = int(w * 0.06), int(h * 0.06)
+    cv2.grabCut(img_enh, mask, (mx, my, w - 2*mx, h - 2*my), bgd, fgd, 5, cv2.GC_INIT_WITH_RECT)
     alpha = np.where((mask == 2) | (mask == 0), 0, 255).astype(np.uint8)
-
-    # Morphological cleanup
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-    alpha = cv2.morphologyEx(alpha, cv2.MORPH_CLOSE, kernel)
-    alpha = cv2.morphologyEx(alpha, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (4, 4)))
-
-    # Feather edges
-    feathered = cv2.GaussianBlur(alpha.astype(np.float32), (11, 11), 3)
+    k1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (4, 4))
+    alpha = cv2.morphologyEx(cv2.morphologyEx(alpha, cv2.MORPH_CLOSE, k1), cv2.MORPH_OPEN, k2)
+    blur = cv2.GaussianBlur(alpha.astype(np.float32), (11, 11), 3)
     border = cv2.dilate(alpha, np.ones((9, 9), np.uint8)) - cv2.erode(alpha, np.ones((9, 9), np.uint8))
     final = alpha.astype(np.float32)
-    final[border > 0] = feathered[border > 0]
-
+    final[border > 0] = blur[border > 0]
     return np.clip(final, 0, 255).astype(np.uint8)
 
 
-def remove_background(image_data: bytes) -> bytes:
+def remove_bg_from_bytes(image_data: bytes) -> bytes:
     nparr = np.frombuffer(image_data, np.uint8)
     orig = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if orig is None:
         raise ValueError("Could not decode image")
-
     oh, ow = orig.shape[:2]
-
-    # Resize for processing
     scale = min(1.0, PROC_DIM / max(oh, ow))
-    if scale < 1.0:
-        proc = cv2.resize(orig, (int(ow * scale), int(oh * scale)), interpolation=cv2.INTER_AREA)
-    else:
-        proc = orig.copy()
-
-    # Choose algorithm based on background complexity
+    proc = cv2.resize(orig, (int(ow * scale), int(oh * scale)), cv2.INTER_AREA) if scale < 1 else orig.copy()
     simple, bg_color = is_simple_background(proc)
-    if simple:
-        alpha_small = color_key_mask(proc, bg_color)
-    else:
-        alpha_small = grabcut_mask(proc)
-
-    # Upscale alpha to original size
-    if scale < 1.0:
-        alpha = cv2.resize(alpha_small, (ow, oh), interpolation=cv2.INTER_LINEAR)
-        alpha = cv2.GaussianBlur(alpha, (5, 5), 1)
+    alpha_small = color_key_mask(proc, bg_color) if simple else grabcut_mask(proc)
+    if scale < 1:
+        alpha = cv2.GaussianBlur(cv2.resize(alpha_small, (ow, oh), cv2.INTER_LINEAR), (5, 5), 1)
     else:
         alpha = alpha_small
-
-    b_ch, g_ch, r_ch = cv2.split(orig)
-    rgba = cv2.merge([b_ch, g_ch, r_ch, alpha])
-    _, buf = cv2.imencode('.png', rgba)
+    b, g, r = cv2.split(orig)
+    _, buf = cv2.imencode('.png', cv2.merge([b, g, r, alpha]))
     return buf.tobytes()
+
+
+# ── Background compositing ────────────────────────────────────────────────────
+
+def make_background(w: int, h: int, is_auto: bool) -> Image.Image:
+    pixels = np.zeros((h, w, 3), dtype=np.uint8)
+    for y in range(h):
+        t = y / h
+        if is_auto:
+            r_v = int(13 + t * 5)
+            g_v = int(13 + t * 5)
+            b_v = max(5, int(26 - t * 21))
+            pixels[y, :] = [r_v, g_v, b_v]
+        else:
+            cx_f = np.arange(w, dtype=np.float32)
+            cy_f = y
+            dx = (cx_f - w / 2) / (w / 2)
+            dy = (cy_f - h * 0.3) / h
+            d = np.clip(np.sqrt(dx**2 + dy**2) / 0.65, 0, 1)
+            v = np.clip(255 - d * 30, 220, 255).astype(np.uint8)
+            b_arr = np.clip(v - d * 10 + 10, 215, 255).astype(np.uint8)
+            pixels[y, :, 0] = v
+            pixels[y, :, 1] = v
+            pixels[y, :, 2] = b_arr
+    return Image.fromarray(pixels, 'RGB')
+
+
+def composite_image(subject_png: bytes, category: str) -> bytes:
+    subject = Image.open(io.BytesIO(subject_png)).convert('RGBA')
+    sw, sh = subject.size
+    is_auto = (category or '').lower() == 'auto'
+    bg = make_background(sw, sh, is_auto).convert('RGBA')
+
+    if is_auto:
+        # Add elliptical podium
+        podium_y = int(sh * 0.72)
+        podium_w = int(sw * 0.7)
+        podium_h = int(sh * 0.06)
+        podium = Image.new('RGBA', (podium_w, podium_h), (0, 0, 0, 0))
+        pd = np.zeros((podium_h, podium_w, 4), dtype=np.uint8)
+        for py in range(podium_h):
+            for px in range(podium_w):
+                ex = (px - podium_w / 2) / (podium_w / 2)
+                ey = (py - podium_h / 2) / (podium_h / 2)
+                if ex*ex + ey*ey <= 1:
+                    t = py / podium_h
+                    pd[py, px] = [int(42 + t*(17-42)), int(42 + t*(17-42)), int(106 + t*(48-106)), 200]
+        podium = Image.fromarray(pd, 'RGBA')
+        bg.paste(podium, (int((sw - podium_w) / 2), podium_y - podium_h // 2), podium)
+
+    bg.paste(subject, (0, 0), subject)
+    out = io.BytesIO()
+    bg.convert('RGB').save(out, format='WEBP', quality=82)
+    return out.getvalue()
+
+
+# ── Supabase upload ───────────────────────────────────────────────────────────
+
+def upload_to_supabase(data: bytes, content_type: str) -> str:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise ValueError("Supabase not configured on this service")
+    from datetime import datetime
+    now = datetime.utcnow()
+    uid = ''.join(random.choices(string.ascii_lowercase + string.digits, k=9))
+    path = f"{now.year}/{now.month:02d}/{int(time.time())}-{uid}_pro.webp"
+    url = f"{SUPABASE_URL}/storage/v1/object/listings/{path}"
+    r = req_lib.post(url, headers={
+        'Authorization': f'Bearer {SUPABASE_KEY}',
+        'Content-Type': content_type,
+        'x-upsert': 'false',
+        'Cache-Control': '31536000',
+    }, data=data, timeout=30)
+    r.raise_for_status()
+    return f"{SUPABASE_URL}/storage/v1/object/public/listings/{path}"
+
+
+# ── HTTP handler ──────────────────────────────────────────────────────────────
+
+CORS_HEADERS = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+}
 
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+    def send_cors(self):
+        for k, v in CORS_HEADERS.items():
+            self.send_header(k, v)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_cors()
+        self.end_headers()
+
     def do_GET(self):
         if self.path == "/health":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_cors()
             self.end_headers()
             self.wfile.write(b'{"ok":true}')
 
     def do_POST(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            data = json.loads(body)
+        except Exception as e:
+            self._error(400, str(e))
+            return
+
         if self.path == "/remove-bg":
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(length)
-                req = json.loads(body)
-                image_url = ''.join(c for c in req["image_url"] if ord(c) >= 32)
+            self._handle_remove_bg(data)
+        elif self.path == "/process":
+            self._handle_process(data)
+        else:
+            self._error(404, "not found")
 
-                with urllib.request.urlopen(image_url, timeout=20) as r:
-                    input_data = r.read()
+    def _handle_remove_bg(self, data):
+        try:
+            image_url = ''.join(c for c in data["image_url"] if ord(c) >= 32)
+            with urllib.request.urlopen(image_url, timeout=20) as r:
+                input_data = r.read()
+            output = remove_bg_from_bytes(input_data)
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(output)))
+            self.send_cors()
+            self.end_headers()
+            self.wfile.write(output)
+        except Exception as e:
+            self._error(500, str(e))
 
-                output_data = remove_background(input_data)
+    def _handle_process(self, data):
+        try:
+            image_url = ''.join(c for c in data.get("image_url", "") if ord(c) >= 32)
+            category = data.get("category", "general")
+            if not image_url:
+                self._error(400, "image_url required")
+                return
+            with urllib.request.urlopen(image_url, timeout=20) as r:
+                input_data = r.read()
+            no_bg = remove_bg_from_bytes(input_data)
+            final_webp = composite_image(no_bg, category)
+            final_url = upload_to_supabase(final_webp, 'image/webp')
+            self._json(200, {"ok": True, "url": final_url})
+        except Exception as e:
+            self._error(500, str(e))
 
-                self.send_response(200)
-                self.send_header("Content-Type", "image/png")
-                self.send_header("Content-Length", str(len(output_data)))
-                self.end_headers()
-                self.wfile.write(output_data)
-            except Exception as e:
-                err = json.dumps({"error": str(e)}).encode()
-                self.send_response(500)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(err)
+    def _json(self, status, obj):
+        body = json.dumps(obj).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_cors()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _error(self, status, msg):
+        self._json(status, {"error": msg})
 
 
 if __name__ == "__main__":
