@@ -157,18 +157,28 @@ def make_showroom(w: int, h: int) -> Image.Image:
     for xp in range(-120, 121, 20):
         draw.line([(vp, wall_h), (vp + int(w * xp / 100), h)], fill=(38, 62, 185, 25))
 
-    # zyAI.ro floor branding
-    fs = max(16, int(w * 0.052))
+    # zyAI.ro floor branding — perspectivă, imprimat pe podea
+    fs = max(36, int(w * 0.11))
     try:
         fnt = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", fs)
     except Exception:
         fnt = ImageFont.load_default()
     txt = "zyAI.ro"
-    bb = draw.textbbox((0, 0), txt, font=fnt)
-    bx = (w - (bb[2] - bb[0])) // 2
-    by = wall_h + int((h - wall_h) * 0.62)
-    draw.text((bx+1, by+1), txt, font=fnt, fill=(0, 0, 60, 50))
-    draw.text((bx, by), txt, font=fnt, fill=(110, 155, 255, 52))
+    # Desenăm textul pe suprafață separată
+    bb_tmp = ImageDraw.Draw(Image.new('RGBA', (1, 1))).textbbox((0, 0), txt, font=fnt)
+    tw, th = bb_tmp[2] - bb_tmp[0] + 20, bb_tmp[3] - bb_tmp[1] + 20
+    txt_surf = Image.new('RGBA', (tw, th), (0, 0, 0, 0))
+    td = ImageDraw.Draw(txt_surf)
+    # Umbra
+    td.text((8, 8), txt, font=fnt, fill=(0, 10, 60, 80))
+    # Text principal — albastru neon subtil
+    td.text((6, 6), txt, font=fnt, fill=(90, 140, 255, 95))
+    # Perspectivă: comprimăm vertical pentru efect de podea
+    persp_h = max(1, int(th * 0.38))
+    txt_floor = txt_surf.resize((tw, persp_h), Image.LANCZOS)
+    px = (w - tw) // 2
+    py = wall_h + int((h - wall_h) * 0.52)
+    img.alpha_composite(txt_floor, (px, py))
 
     return img
 
