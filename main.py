@@ -6,33 +6,53 @@ import numpy as np
 import cv2
 
 PORT = int(os.environ.get("PORT", 8002))
+MAX_DIM = 800  # resize before GrabCut to stay under 30s timeout
 print(f"OpenCV background removal service ready on port {PORT}")
 
 def remove_background(image_data: bytes) -> bytes:
     nparr = np.frombuffer(image_data, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    if img is None:
+    orig = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if orig is None:
         raise ValueError("Could not decode image")
 
-    h, w = img.shape[:2]
+    oh, ow = orig.shape[:2]
 
-    # GrabCut cu dreptunghi centrat (marginea 8% ignorată ca fundal)
+    # Resize down for GrabCut processing
+    scale = min(1.0, MAX_DIM / max(oh, ow))
+    if scale < 1.0:
+        pw = int(ow * scale)
+        ph = int(oh * scale)
+        proc = cv2.resize(orig, (pw, ph), interpolation=cv2.INTER_AREA)
+    else:
+        pw, ph = ow, oh
+        proc = orig
+
+    h, w = proc.shape[:2]
+
+    # GrabCut with centered rectangle (8% margin treated as background)
     mask = np.zeros((h, w), np.uint8)
     bgd = np.zeros((1, 65), np.float64)
     fgd = np.zeros((1, 65), np.float64)
     mx = int(w * 0.08)
     my = int(h * 0.08)
     rect = (mx, my, w - 2 * mx, h - 2 * my)
-    cv2.grabCut(img, mask, rect, bgd, fgd, 8, cv2.GC_INIT_WITH_RECT)
+    cv2.grabCut(proc, mask, rect, bgd, fgd, 5, cv2.GC_INIT_WITH_RECT)
 
-    # Masca finală: 0/2 = fundal, 1/3 = prim-plan
-    alpha = np.where((mask == 2) | (mask == 0), 0, 255).astype(np.uint8)
+    # Final mask: 0/2 = background, 1/3 = foreground
+    alpha_small = np.where((mask == 2) | (mask == 0), 0, 255).astype(np.uint8)
 
     # Smooth edges
-    alpha = cv2.GaussianBlur(alpha, (5, 5), 0)
-    _, alpha = cv2.threshold(alpha, 127, 255, cv2.THRESH_BINARY)
+    alpha_small = cv2.GaussianBlur(alpha_small, (5, 5), 0)
+    _, alpha_small = cv2.threshold(alpha_small, 127, 255, cv2.THRESH_BINARY)
 
-    b, g, r = cv2.split(img)
+    # Scale alpha back to original size if we downscaled
+    if scale < 1.0:
+        alpha = cv2.resize(alpha_small, (ow, oh), interpolation=cv2.INTER_LINEAR)
+        _, alpha = cv2.threshold(alpha, 127, 255, cv2.THRESH_BINARY)
+    else:
+        alpha = alpha_small
+
+    b, g, r = cv2.split(orig)
     rgba = cv2.merge([b, g, r, alpha])
 
     _, buf = cv2.imencode('.png', rgba)
