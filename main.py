@@ -5,7 +5,7 @@ import urllib.request
 from rembg import remove, new_session
 
 PORT = int(os.environ.get("PORT", 8002))
-session = new_session("u2net")
+session = new_session("u2netp")
 print(f"rembg model loaded, ready on port {PORT}")
 
 class Handler(BaseHTTPRequestHandler):
