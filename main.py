@@ -104,8 +104,8 @@ def remove_bg_hf(image_data: bytes) -> bytes:
     hf_token = os.environ.get("HF_TOKEN", "")
     small_data = resize_for_hf(image_data, 800)
     models = [
-        "https://api-inference.huggingface.co/models/briaai/RMBG-1.4",
-        "https://api-inference.huggingface.co/models/briaai/RMBG-2.0",
+        "https://router.huggingface.co/hf-inference/models/briaai/RMBG-1.4",
+        "https://router.huggingface.co/hf-inference/models/briaai/RMBG-2.0",
     ]
     for model_url in models:
         for attempt in range(3):
@@ -409,8 +409,8 @@ class Handler(BaseHTTPRequestHandler):
                     test_data = r.read()
                 results["input_bytes"] = len(test_data)
                 for model_url in [
-                    "https://api-inference.huggingface.co/models/briaai/RMBG-1.4",
-                    "https://api-inference.huggingface.co/models/briaai/RMBG-2.0",
+                    "https://router.huggingface.co/hf-inference/models/briaai/RMBG-1.4",
+                    "https://router.huggingface.co/hf-inference/models/briaai/RMBG-2.0",
                 ]:
                     key = model_url.split("/")[-1]
                     try:
