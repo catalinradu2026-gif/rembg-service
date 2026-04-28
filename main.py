@@ -238,67 +238,103 @@ def make_showroom(w: int, h: int) -> Image.Image:
     wall_m = (Y < wh_s).astype(np.float32)
     floor_m = 1 - wall_m
 
-    # Pure black base with subtle warm undertone
-    pix[:,:,0] += 6 * wall_m  + 8  * floor_m
-    pix[:,:,1] += 4 * wall_m  + 5  * floor_m
-    pix[:,:,2] += 5 * wall_m  + 4  * floor_m
+    # Deep dark navy base
+    pix[:,:,2] += 15 * wall_m + 11 * floor_m
+    pix[:,:,1] += 8  * wall_m + 7  * floor_m
+    pix[:,:,0] += 5  * wall_m + 5  * floor_m
 
-    # ── 3 warm white spotlight cones ─────────────────────────────────────────
+    # ── 3 cool white/blue spotlight cones ────────────────────────────────────
     spots = [
-        (hw * 0.50, (255, 248, 230), 1.00),  # center — main
-        (hw * 0.15, (255, 235, 190), 0.55),  # left accent
-        (hw * 0.85, (255, 235, 190), 0.55),  # right accent
+        (hw * 0.50, (200, 220, 255), 1.00),
+        (hw * 0.15, (130, 100, 240), 0.60),
+        (hw * 0.85, (130, 100, 240), 0.60),
     ]
     for sx, sc, strength in spots:
         dx = X - sx
         dy = np.maximum(Y, 0.5)
-        cone = np.exp(-(dx / (dy * 0.28 + 1))**2) * wall_m
-        beam = cone * strength * 105
+        cone = np.exp(-(dx / (dy * 0.30 + 1))**2) * wall_m
+        beam = cone * strength * 100
         pix[:,:,0] += beam * sc[0] / 255
         pix[:,:,1] += beam * sc[1] / 255
         pix[:,:,2] += beam * sc[2] / 255
 
-    # Warm floor glow under car
+    # Floor center glow
     ft = np.clip((Y - wh_s) / max(hh - wh_s, 1), 0, 1)
-    floor_glow = np.exp(-Xn**2 * 4.5) * np.exp(-ft * 6) * 30
-    pix[:,:,0] += floor_glow * floor_m * 1.1
-    pix[:,:,1] += floor_glow * floor_m * 0.9
-    pix[:,:,2] += floor_glow * floor_m * 0.5
+    floor_glow = np.exp(-Xn**2 * 3.5) * np.exp(-ft * 7) * 38
+    pix[:,:,2] += floor_glow * floor_m
+    pix[:,:,0] += floor_glow * 0.35 * floor_m
 
     small = Image.fromarray(np.clip(pix, 0, 255).astype(np.uint8), 'RGB')
     img = small.resize((w, h), Image.BILINEAR).convert('RGBA')
     draw = ImageDraw.Draw(img)
 
-    # ── Spotlight fixtures (recessed ceiling spots) ───────────────────────────
+    # ── Spotlight halos ───────────────────────────────────────────────────────
     halo_xs  = [int(w * 0.50), int(w * 0.15), int(w * 0.85)]
-    halo_col = [(255, 250, 230), (255, 238, 195), (255, 238, 195)]
+    halo_col = [(200, 220, 255), (130, 100, 240), (130, 100, 240)]
     for hx, hc in zip(halo_xs, halo_col):
-        r = max(9, int(w * 0.018))
+        r = max(10, int(w * 0.020))
         for ring in range(5, 0, -1):
             rr = r * ring
-            draw.ellipse([(hx-rr, -rr//2), (hx+rr, rr//2)], fill=(*hc, max(3, 22//ring)))
-        draw.ellipse([(hx-r//2, 0), (hx+r//2, r)], fill=(*hc, 230))
+            draw.ellipse([(hx-rr, -rr//2), (hx+rr, rr//2)], fill=(*hc, max(4, 26//ring)))
+        draw.ellipse([(hx-r//2, 0), (hx+r//2, r)], fill=(*hc, 225))
 
-    # ── Gold horizon line ─────────────────────────────────────────────────────
-    for dy in range(-3, 4):
-        a = max(0, 200 - abs(dy) * 55)
-        draw.line([(0, wall_h+dy), (w, wall_h+dy)], fill=(200, 160, 60, a))
+    # ── Neon blue horizon line ────────────────────────────────────────────────
+    for dy in range(-4, 5):
+        a = max(0, 210 - abs(dy) * 50)
+        draw.line([(0, wall_h+dy), (w, wall_h+dy)], fill=(60, 110, 255, a))
 
-    # ── Thin gold frame lines on wall ─────────────────────────────────────────
-    for side_x in [int(w * 0.04), int(w * 0.96)]:
-        draw.line([(side_x, int(wall_h*0.06)), (side_x, wall_h-1)],
-                  fill=(180, 140, 50, 65), width=1)
-    # Horizontal top line
-    draw.line([(int(w*0.04), int(wall_h*0.06)), (int(w*0.96), int(wall_h*0.06))],
-              fill=(180, 140, 50, 50), width=1)
+    # ── Neon side lines ───────────────────────────────────────────────────────
+    for side_x in [int(w * 0.03), int(w * 0.97)]:
+        draw.line([(side_x, int(wall_h*0.05)), (side_x, wall_h)],
+                  fill=(70, 50, 240, 85), width=2)
 
-    # ── Floor grid (dark gold/amber) ──────────────────────────────────────────
+    # ── Floor grid blue ───────────────────────────────────────────────────────
     vp = w // 2
     for i in range(1, 9):
-        fy = wall_h + int((h - wall_h) * (i / 8)**0.5)
-        draw.line([(0, fy), (w, fy)], fill=(140, 100, 30, max(4, 38 - i*4)))
+        fy = wall_h + int((h - wall_h) * (i / 8)**0.52)
+        draw.line([(0, fy), (w, fy)], fill=(45, 75, 200, max(5, 44 - i*5)))
     for xp in range(-130, 131, 16):
-        draw.line([(vp, wall_h), (vp + int(w*xp/100), h)], fill=(120, 85, 25, 14))
+        draw.line([(vp, wall_h), (vp + int(w*xp/100), h)], fill=(38, 62, 185, 18))
+
+    # ── zyAI.ro — LED letters on wall ────────────────────────────────────────
+    fs = max(52, int(w * 0.13))
+    try:
+        fnt = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", fs)
+    except Exception:
+        fnt = ImageFont.load_default()
+    txt = "zyAI.ro"
+    tmp_bb = ImageDraw.Draw(Image.new('RGBA', (1,1))).textbbox((0,0), txt, font=fnt)
+    tw, th = tmp_bb[2]-tmp_bb[0], tmp_bb[3]-tmp_bb[1]
+    pad = 35
+    cw, ch = tw + pad*2 + 20, th + pad*2 + 20
+
+    # Outer glow (wide, white-blue)
+    g1 = Image.new('RGBA', (cw, ch), (0,0,0,0))
+    ImageDraw.Draw(g1).text((pad, pad), txt, font=fnt, fill=(200, 220, 255, 160))
+    g1 = g1.filter(ImageFilter.GaussianBlur(radius=18))
+
+    # Mid glow
+    g2 = Image.new('RGBA', (cw, ch), (0,0,0,0))
+    ImageDraw.Draw(g2).text((pad, pad), txt, font=fnt, fill=(230, 240, 255, 200))
+    g2 = g2.filter(ImageFilter.GaussianBlur(radius=7))
+
+    # Tight core glow
+    g3 = Image.new('RGBA', (cw, ch), (0,0,0,0))
+    ImageDraw.Draw(g3).text((pad, pad), txt, font=fnt, fill=(240, 248, 255, 220))
+    g3 = g3.filter(ImageFilter.GaussianBlur(radius=2))
+
+    # Pure white face
+    face = Image.new('RGBA', (cw, ch), (0,0,0,0))
+    fd = ImageDraw.Draw(face)
+    fd.text((pad, pad), txt, font=fnt, fill=(255, 255, 255, 255))
+
+    led = Image.new('RGBA', (cw, ch), (0,0,0,0))
+    for layer in [g1, g2, g3, face]:
+        led = Image.alpha_composite(led, layer)
+
+    px = max(0, (w - cw) // 2)
+    py = max(2, int(wall_h * 0.10))
+    img.alpha_composite(led, (px, py))
 
     return img
 
@@ -322,9 +358,9 @@ def draw_floor_text(bg: Image.Image, canvas_w: int, canvas_h: int, wall_h: int) 
     flat = Image.new('RGBA', (tw, th), (0, 0, 0, 0))
     fd = ImageDraw.Draw(flat)
     for i in range(5, 0, -1):
-        fd.text((12 + i, 12 + i), txt, font=fnt, fill=(80, 55, 10, 70 + i * 12))
-    fd.text((12, 12), txt, font=fnt, fill=(200, 155, 50, 200))
-    fd.text((12, 11), txt, font=fnt, fill=(255, 220, 120, 100))
+        fd.text((12 + i, 12 + i), txt, font=fnt, fill=(10, 25, 110, 70 + i * 12))
+    fd.text((12, 12), txt, font=fnt, fill=(85, 140, 255, 210))
+    fd.text((12, 11), txt, font=fnt, fill=(170, 210, 255, 110))
     glow = flat.filter(ImageFilter.GaussianBlur(radius=6))
     flat = Image.alpha_composite(glow, flat)
 
