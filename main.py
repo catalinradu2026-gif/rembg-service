@@ -457,6 +457,18 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     bg = make_showroom(sw, canvas_h, wall_frac=wall_frac)
     draw = ImageDraw.Draw(bg)
 
+    # ── Contact shadow — anchors car visually to floor ────────────────────────
+    shadow_layer = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shadow_layer)
+    scx, sy = sw // 2, wall_h
+    for i in range(10, 0, -1):
+        srw = int(sw * 0.60 * i / 10)
+        srh = max(4, int(srw * 0.07 * i / 10))
+        sa = int(80 * (i / 10) ** 1.5)
+        sd.ellipse([(scx - srw//2, sy - srh//2), (scx + srw//2, sy + srh//2)],
+                   fill=(5, 10, 40, sa))
+    bg.alpha_composite(shadow_layer.filter(ImageFilter.GaussianBlur(radius=10)))
+
     # ── Turntable platform at floor line ─────────────────────────────────────
     cx, py = sw // 2, wall_h
     plat_w = int(sw * 0.68)
