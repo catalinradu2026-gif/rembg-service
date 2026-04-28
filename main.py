@@ -272,54 +272,55 @@ def make_showroom(w: int, h: int) -> Image.Image:
     for xp in range(-130, 131, 18):
         draw.line([(vp, wall_h), (vp + int(w * xp / 100), h)], fill=(38, 62, 185, 18))
 
-    # ── zyAI — 3D volumetric text on back wall ────────────────────────────────
-    fs = max(64, int(w * 0.16))
+    return img
+
+
+def draw_floor_text(bg: Image.Image, canvas_w: int, canvas_h: int, wall_h: int) -> Image.Image:
+    """Render 'zyAI.ro' in perspective on the showroom floor using OpenCV warpPerspective."""
+    from PIL import ImageDraw, ImageFont, ImageFilter
+
+    fs = max(55, int(canvas_w * 0.11))
     try:
         fnt = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", fs)
     except Exception:
         fnt = ImageFont.load_default()
 
-    txt = "zyAI"
+    txt = "zyAI.ro"
     tmp = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
     bb = tmp.textbbox((0, 0), txt, font=fnt)
-    tw, th = bb[2] - bb[0], bb[3] - bb[1]
-    pad = 40
-    cw, ch = tw + pad * 2 + 25, th + pad * 2 + 25
+    tw, th = bb[2] - bb[0] + 24, bb[3] - bb[1] + 24
 
-    # Layer 1: wide outer glow (electric blue)
-    g_out = Image.new('RGBA', (cw, ch), (0, 0, 0, 0))
-    ImageDraw.Draw(g_out).text((pad, pad), txt, font=fnt, fill=(70, 105, 255, 170))
-    g_out = g_out.filter(ImageFilter.GaussianBlur(radius=22))
+    # Render text flat on transparent canvas
+    flat = Image.new('RGBA', (tw, th), (0, 0, 0, 0))
+    fd = ImageDraw.Draw(flat)
+    for i in range(5, 0, -1):
+        fd.text((12 + i, 12 + i), txt, font=fnt, fill=(10, 25, 110, 70 + i * 12))
+    fd.text((12, 12), txt, font=fnt, fill=(85, 140, 255, 210))
+    fd.text((12, 11), txt, font=fnt, fill=(170, 210, 255, 110))
+    glow = flat.filter(ImageFilter.GaussianBlur(radius=6))
+    flat = Image.alpha_composite(glow, flat)
 
-    # Layer 2: tight inner glow
-    g_in = Image.new('RGBA', (cw, ch), (0, 0, 0, 0))
-    ImageDraw.Draw(g_in).text((pad, pad), txt, font=fnt, fill=(140, 175, 255, 200))
-    g_in = g_in.filter(ImageFilter.GaussianBlur(radius=7))
+    flat_arr = np.array(flat, dtype=np.uint8)
 
-    # Layer 3: 3D extrusion (shadow layers going bottom-right)
-    ext = Image.new('RGBA', (cw, ch), (0, 0, 0, 0))
-    ed = ImageDraw.Draw(ext)
-    depth = max(6, int(fs * 0.08))
-    for i in range(depth, 0, -1):
-        c = int(15 + i * 7)
-        ed.text((pad + i, pad + i), txt, font=fnt, fill=(c, c + 18, min(c * 4, 170), 190))
-
-    # Layer 4: main face — bright white-blue
-    face = Image.new('RGBA', (cw, ch), (0, 0, 0, 0))
-    fd = ImageDraw.Draw(face)
-    fd.text((pad, pad), txt, font=fnt, fill=(215, 232, 255, 255))
-    fd.text((pad, pad - 1), txt, font=fnt, fill=(255, 255, 255, 130))  # top highlight
-    fd.text((pad - 1, pad), txt, font=fnt, fill=(255, 255, 255, 60))   # left highlight
-
-    combined = Image.new('RGBA', (cw, ch), (0, 0, 0, 0))
-    for layer in [g_out, g_in, ext, face]:
-        combined = Image.alpha_composite(combined, layer)
-
-    px = max(0, (w - cw) // 2)
-    py = max(2, int(wall_h * 0.14))
-    img.alpha_composite(combined, (px, py))
-
-    return img
+    # Perspective: source rectangle → floor trapezoid
+    src = np.float32([[0, 0], [tw, 0], [tw, th], [0, th]])
+    cx = canvas_w // 2
+    floor_h = canvas_h - wall_h
+    far_y  = wall_h + int(floor_h * 0.18)
+    near_y = wall_h + int(floor_h * 0.62)
+    far_hw  = int(canvas_w * 0.13)
+    near_hw = int(canvas_w * 0.34)
+    dst = np.float32([
+        [cx - far_hw,  far_y],
+        [cx + far_hw,  far_y],
+        [cx + near_hw, near_y],
+        [cx - near_hw, near_y],
+    ])
+    M = cv2.getPerspectiveTransform(src, dst)
+    warped = cv2.warpPerspective(flat_arr, M, (canvas_w, canvas_h), flags=cv2.INTER_LINEAR)
+    warped_img = Image.fromarray(warped, 'RGBA')
+    bg.alpha_composite(warped_img)
+    return bg
 
 
 def make_studio(w: int, h: int) -> Image.Image:
@@ -356,39 +357,65 @@ def add_watermark(img: Image.Image) -> Image.Image:
 
 
 def composite_image(subject_png: bytes, category: str) -> bytes:
+    from PIL import ImageFilter
+
     subject = Image.open(io.BytesIO(subject_png)).convert('RGBA')
-    # Cap resolution to avoid OOM on large original images
-    MAX_SIDE = 1100
-    sw, sh = subject.size
-    if max(sw, sh) > MAX_SIDE:
-        scale = MAX_SIDE / max(sw, sh)
-        sw, sh = int(sw * scale), int(sh * scale)
-        subject = subject.resize((sw, sh), Image.LANCZOS)
     cat_lower = (category or '').lower()
     is_auto = not cat_lower or cat_lower == 'general' or 'auto' in cat_lower or cat_lower in ('vehicule', 'masini', 'cars')
-    bg = make_showroom(sw, sh) if is_auto else make_studio(sw, sh).convert('RGBA')
 
-    # ── Car reflection on floor ───────────────────────────────────────────────
-    if is_auto:
-        from PIL import ImageFilter
-        wall_h = int(sh * 0.58)
-        refl_height = min(int(sh * 0.22), sh - wall_h - 5)
-        if refl_height > 10:
-            # Flip car vertically for reflection
-            refl = subject.transpose(Image.FLIP_TOP_BOTTOM)
-            # Fade gradient: opaque at top of reflection, transparent at bottom
-            fade = Image.new('L', (sw, sh), 0)
-            fade_arr = np.zeros((sh,), dtype=np.uint8)
-            for fy in range(refl_height):
-                fade_arr[sh - refl_height + fy] = int(55 * (1 - fy / refl_height))
-            fade_2d = np.tile(fade_arr[:, np.newaxis], (1, sw))
-            fade = Image.fromarray(fade_2d, 'L')
-            refl_rgba = refl.copy()
-            refl_rgba.putalpha(fade)
-            refl_blur = refl_rgba.filter(ImageFilter.GaussianBlur(radius=3))
-            bg.alpha_composite(refl_blur, (0, 0))
+    if not is_auto:
+        # Non-auto: simple studio, keep original size
+        sw, sh = subject.size
+        if max(sw, sh) > 1100:
+            s = 1100 / max(sw, sh)
+            sw, sh = int(sw * s), int(sh * s)
+            subject = subject.resize((sw, sh), Image.LANCZOS)
+        bg = make_studio(sw, sh).convert('RGBA')
+        bg.paste(subject, (0, 0), subject)
+        result = add_watermark(bg)
+        out = io.BytesIO()
+        result.convert('RGB').save(out, format='WEBP', quality=85)
+        return out.getvalue()
 
-    bg.paste(subject, (0, 0), subject)
+    # ── Auto showroom ─────────────────────────────────────────────────────────
+    CANVAS_W, CANVAS_H = 1100, 780
+    WALL_FRAC = 0.56
+    wall_h = int(CANVAS_H * WALL_FRAC)
+
+    # Scale car: max 83% canvas width, max 94% wall height
+    sw, sh = subject.size
+    scale = min((CANVAS_W * 0.83) / sw, (wall_h * 0.94) / sh, 1.0)
+    cw_car = int(sw * scale)
+    ch_car = int(sh * scale)
+    subject = subject.resize((cw_car, ch_car), Image.LANCZOS)
+
+    bg = make_showroom(CANVAS_W, CANVAS_H)
+
+    # Car position: centered X, bottom sits on floor line
+    car_x = (CANVAS_W - cw_car) // 2
+    car_y = wall_h - ch_car  # bottom of car at floor line
+    car_y = max(0, car_y)
+
+    # ── Reflection on floor ───────────────────────────────────────────────────
+    refl_height = min(int(ch_car * 0.20), CANVAS_H - wall_h - 4)
+    if refl_height > 8:
+        refl = subject.transpose(Image.FLIP_TOP_BOTTOM)
+        fade_arr = np.zeros((CANVAS_H,), dtype=np.uint8)
+        for fy in range(refl_height):
+            fade_arr[wall_h + fy] = int(50 * (1 - fy / refl_height))
+        fade_2d = np.zeros((CANVAS_H, CANVAS_W), dtype=np.uint8)
+        fade_2d[:, car_x:car_x + cw_car] = np.tile(fade_arr[:, np.newaxis], (1, cw_car))
+        refl_full = Image.new('RGBA', (CANVAS_W, CANVAS_H), (0, 0, 0, 0))
+        refl_full.paste(refl, (car_x, wall_h), refl)
+        refl_full.putalpha(Image.fromarray(fade_2d, 'L'))
+        bg.alpha_composite(refl_full.filter(ImageFilter.GaussianBlur(radius=2)))
+
+    # ── zyAI.ro floor text in perspective ────────────────────────────────────
+    bg = draw_floor_text(bg, CANVAS_W, CANVAS_H, wall_h)
+
+    # ── Paste car on top ──────────────────────────────────────────────────────
+    bg.paste(subject, (car_x, car_y), subject)
+
     result = add_watermark(bg)
     out = io.BytesIO()
     result.convert('RGB').save(out, format='WEBP', quality=85)
