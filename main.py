@@ -438,16 +438,12 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         sw, sh = int(sw * s), int(sh * s)
         subject = subject.resize((sw, sh), Image.LANCZOS)
 
-    # Detect actual car bottom (ignore transparent padding from PhotoRoom)
     import math
-    _alpha = np.array(subject)[:, :, 3]
-    _rows = np.where(_alpha.max(axis=1) > 10)[0]
-    actual_bottom = int(_rows[-1]) + 1 if len(_rows) > 0 else sh
 
-    # Canvas: car + floor area below (car bottom = wall/floor line)
-    floor_extra = int(actual_bottom * 0.40)
-    canvas_h = actual_bottom + floor_extra
-    wall_h = actual_bottom
+    # Canvas: full car image + floor strip below
+    floor_extra = int(sw * 0.20)
+    canvas_h = sh + floor_extra
+    wall_h = sh
     wall_frac = wall_h / canvas_h
 
     bg = make_showroom(sw, canvas_h, wall_frac=wall_frac)
@@ -474,17 +470,17 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         draw.line([(ix, iy), (ox, oy)], fill=(60, 100, 210, 100), width=1)
 
     # ── Reflection ────────────────────────────────────────────────────────────
-    refl_h = min(int(canvas_h * 0.16), floor_extra - 4)
+    refl_h = min(int(sh * 0.18), floor_extra - 4)
     if refl_h > 6:
-        refl = subject.crop((0, actual_bottom - refl_h, sw, actual_bottom)).transpose(Image.FLIP_TOP_BOTTOM)
+        refl = subject.crop((0, sh - refl_h, sw, sh)).transpose(Image.FLIP_TOP_BOTTOM)
         refl_canvas = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
-        fade_arr = np.array([int(45 * (1 - i / refl_h)) for i in range(refl_h)], dtype=np.uint8)
+        fade_arr = np.array([int(40 * (1 - i / refl_h)) for i in range(refl_h)], dtype=np.uint8)
         fade_2d = np.tile(fade_arr[:, np.newaxis], (1, sw))
         refl.putalpha(Image.fromarray(fade_2d, 'L'))
         refl_canvas.paste(refl.filter(ImageFilter.GaussianBlur(radius=3)), (0, wall_h))
         bg.alpha_composite(refl_canvas)
 
-    # ── Car at top of canvas, bottom sits exactly on floor line ──────────────
+    # ── Car at (0,0), bottom of image = floor line ────────────────────────────
     bg.paste(subject, (0, 0), subject)
 
     result = add_watermark(bg)
