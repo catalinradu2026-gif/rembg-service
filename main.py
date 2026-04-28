@@ -442,40 +442,68 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         return out.getvalue()
 
     # ── Auto showroom ─────────────────────────────────────────────────────────
-    CANVAS_W, CANVAS_H = 1100, 780
-    WALL_FRAC = 0.56
+    sw, sh = subject.size
+    MAX_SIDE = 1100
+    if max(sw, sh) > MAX_SIDE:
+        s = MAX_SIDE / max(sw, sh)
+        sw, sh = int(sw * s), int(sh * s)
+        subject = subject.resize((sw, sh), Image.LANCZOS)
+
+    # Canvas: car width + 20% padding each side, height + 30% for floor/ceiling
+    CANVAS_W = int(sw * 1.40)
+    CANVAS_H = int(sh * 1.38)
+    WALL_FRAC = 0.70  # 70% wall, 30% floor — less empty floor
     wall_h = int(CANVAS_H * WALL_FRAC)
 
-    # Scale car: max 83% canvas width, max 94% wall height
-    sw, sh = subject.size
-    scale = min((CANVAS_W * 0.75) / sw, (wall_h * 0.90) / sh, 1.0)
-    cw_car = int(sw * scale)
-    ch_car = int(sh * scale)
-    subject = subject.resize((cw_car, ch_car), Image.LANCZOS)
-
     bg = make_showroom(CANVAS_W, CANVAS_H)
+    draw = ImageDraw.Draw(bg)
 
-    # Car position: centered X, bottom sits on floor line
-    car_x = (CANVAS_W - cw_car) // 2
-    car_y = wall_h - ch_car  # bottom of car at floor line
-    car_y = max(0, car_y)
+    # Car position: centered, bottom at floor line
+    car_x = (CANVAS_W - sw) // 2
+    car_y = wall_h - sh
+    car_y = max(int(CANVAS_H * 0.05), car_y)
+
+    # ── Turntable platform under car ─────────────────────────────────────────
+    cx = CANVAS_W // 2
+    py = wall_h
+    plat_w = int(sw * 0.72)
+    plat_h = int(plat_w * 0.16)
+    # Outer glow rings
+    for ring in range(4, 0, -1):
+        rw = plat_w + ring * 12
+        rh = plat_h + ring * 4
+        draw.ellipse([(cx - rw//2, py - rh//2), (cx + rw//2, py + rh//2)],
+                     fill=(40, 70, 200, 18 * ring))
+    # Platform body (dark metallic)
+    draw.ellipse([(cx - plat_w//2, py - plat_h//2), (cx + plat_w//2, py + plat_h//2)],
+                 fill=(22, 25, 40, 230))
+    # Rim highlight arc (top = brighter)
+    draw.arc([(cx - plat_w//2, py - plat_h//2), (cx + plat_w//2, py + plat_h//2)],
+             start=190, end=350, fill=(90, 130, 255, 180), width=2)
+    # Rotation tick marks
+    import math
+    for deg in range(0, 360, 30):
+        rad = math.radians(deg)
+        ix = cx + int((plat_w//2 - 6) * math.cos(rad))
+        iy = py + int((plat_h//2 - 2) * math.sin(rad))
+        ox = cx + int((plat_w//2 + 2) * math.cos(rad))
+        oy = py + int((plat_h//2 + 1) * math.sin(rad))
+        draw.line([(ix, iy), (ox, oy)], fill=(70, 110, 220, 120), width=1)
 
     # ── Reflection on floor ───────────────────────────────────────────────────
-    refl_height = min(int(ch_car * 0.20), CANVAS_H - wall_h - 4)
-    if refl_height > 8:
+    refl_h = min(int(sh * 0.18), CANVAS_H - wall_h - 4)
+    if refl_h > 6:
         refl = subject.transpose(Image.FLIP_TOP_BOTTOM)
         fade_arr = np.zeros((CANVAS_H,), dtype=np.uint8)
-        for fy in range(refl_height):
-            fade_arr[wall_h + fy] = int(50 * (1 - fy / refl_height))
+        for fy in range(refl_h):
+            fade_arr[wall_h + fy] = int(45 * (1 - fy / refl_h))
         fade_2d = np.zeros((CANVAS_H, CANVAS_W), dtype=np.uint8)
-        fade_2d[:, car_x:car_x + cw_car] = np.tile(fade_arr[:, np.newaxis], (1, cw_car))
+        x0 = max(0, car_x); x1 = min(CANVAS_W, car_x + sw)
+        fade_2d[:, x0:x1] = np.tile(fade_arr[:, np.newaxis], (1, x1 - x0))
         refl_full = Image.new('RGBA', (CANVAS_W, CANVAS_H), (0, 0, 0, 0))
         refl_full.paste(refl, (car_x, wall_h), refl)
         refl_full.putalpha(Image.fromarray(fade_2d, 'L'))
         bg.alpha_composite(refl_full.filter(ImageFilter.GaussianBlur(radius=2)))
-
-    # ── zyAI.ro floor text in perspective ────────────────────────────────────
-    bg = draw_floor_text(bg, CANVAS_W, CANVAS_H, wall_h)
 
     # ── Paste car on top ──────────────────────────────────────────────────────
     bg.paste(subject, (car_x, car_y), subject)
