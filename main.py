@@ -80,10 +80,29 @@ def grabcut_mask(img):
     return np.clip(final, 0, 255).astype(np.uint8)
 
 
+def resize_for_hf(image_data: bytes, max_side: int = 800) -> bytes:
+    """Resize image to max_side before sending to HF (faster, less likely to OOM)."""
+    try:
+        nparr = np.frombuffer(image_data, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            return image_data
+        h, w = img.shape[:2]
+        if max(h, w) <= max_side:
+            return image_data
+        scale = max_side / max(h, w)
+        img = cv2.resize(img, (int(w * scale), int(h * scale)), cv2.INTER_AREA)
+        _, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return buf.tobytes()
+    except Exception:
+        return image_data
+
+
 def remove_bg_hf(image_data: bytes) -> bytes:
     """Remove background using Hugging Face RMBG (ML quality, free tier)."""
     import urllib.error, time, json as _json
     hf_token = os.environ.get("HF_TOKEN", "")
+    small_data = resize_for_hf(image_data, 800)
     models = [
         "https://api-inference.huggingface.co/models/briaai/RMBG-1.4",
         "https://api-inference.huggingface.co/models/briaai/RMBG-2.0",
@@ -91,31 +110,33 @@ def remove_bg_hf(image_data: bytes) -> bytes:
     for model_url in models:
         for attempt in range(3):
             try:
-                req = urllib.request.Request(model_url, data=image_data, method='POST')
+                req = urllib.request.Request(model_url, data=small_data, method='POST')
                 req.add_header('Content-Type', 'image/jpeg')
                 if hf_token:
                     req.add_header('Authorization', f'Bearer {hf_token}')
-                with urllib.request.urlopen(req, timeout=50) as r:
+                with urllib.request.urlopen(req, timeout=45) as r:
+                    status = r.status
                     result = r.read()
                 if len(result) > 1000:
-                    print(f"HF RMBG success with {model_url} attempt {attempt+1}")
+                    print(f"HF RMBG ok: {model_url} attempt {attempt+1}, {len(result)} bytes")
                     return result
+                print(f"HF response too small ({len(result)} bytes), status={status}")
                 raise ValueError(f"HF response too small: {len(result)} bytes")
             except urllib.error.HTTPError as e:
                 body = e.read().decode('utf-8', errors='ignore')
+                print(f"HF HTTP {e.code} from {model_url}: {body[:200]}")
                 if e.code == 503:
                     wait = 20
                     try:
-                        wait = min(int(_json.loads(body).get('estimated_time', 20)), 35)
+                        wait = min(int(_json.loads(body).get('estimated_time', 20)), 30)
                     except Exception:
                         pass
-                    print(f"HF model loading, waiting {wait}s...")
+                    print(f"HF model loading, waiting {wait}s (attempt {attempt+1}/3)...")
                     time.sleep(wait)
                     continue
-                print(f"HF HTTP {e.code} from {model_url}: {body[:120]}")
-                break  # try next model
+                break  # non-503 error: try next model
             except Exception as ex:
-                print(f"HF attempt {attempt+1} failed: {ex}")
+                print(f"HF attempt {attempt+1} exception: {ex}")
                 if attempt < 2:
                     time.sleep(5)
     raise ValueError("HF RMBG all attempts failed")
@@ -372,12 +393,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            body = json.dumps({"ok": True, "model": "grabcut"}).encode()
+            body = json.dumps({"ok": True, "model": "grabcut+hf"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
             self.end_headers()
             self.wfile.write(body)
+        elif self.path == "/debug-hf":
+            # Test HF RMBG with a small public image
+            try:
+                test_url = "https://www.gstatic.com/webp/gallery/1.jpg"
+                with urllib.request.urlopen(test_url, timeout=10) as r:
+                    test_data = r.read()
+                result = remove_bg_hf(test_data)
+                self._json(200, {"ok": True, "hf_bytes": len(result), "input_bytes": len(test_data)})
+            except Exception as e:
+                self._json(200, {"ok": False, "error": str(e)[:300]})
 
     def do_POST(self):
         try:
