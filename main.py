@@ -221,11 +221,10 @@ def remove_bg_from_bytes(image_data: bytes) -> bytes:
 
 # ── Background compositing ────────────────────────────────────────────────────
 
-def make_showroom(w: int, h: int) -> Image.Image:
+def make_showroom(w: int, h: int, wall_frac: float = 0.56) -> Image.Image:
     """zyAI LUXURY showroom — pure black, warm white spotlights, gold accents."""
     from PIL import ImageDraw, ImageFont, ImageFilter
 
-    wall_frac = 0.56
     wall_h = int(h * wall_frac)
 
     # ── Background at half-res ────────────────────────────────────────────────
@@ -439,12 +438,22 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         sw, sh = int(sw * s), int(sh * s)
         subject = subject.resize((sw, sh), Image.LANCZOS)
 
-    wall_h = int(sh * 0.58)
-    bg = make_showroom(sw, sh)
+    # Detect actual car bottom (ignore transparent padding from PhotoRoom)
+    import math
+    _alpha = np.array(subject)[:, :, 3]
+    _rows = np.where(_alpha.max(axis=1) > 10)[0]
+    actual_bottom = int(_rows[-1]) + 1 if len(_rows) > 0 else sh
+
+    # Canvas: car + floor area below (car bottom = wall/floor line)
+    floor_extra = int(actual_bottom * 0.40)
+    canvas_h = actual_bottom + floor_extra
+    wall_h = actual_bottom
+    wall_frac = wall_h / canvas_h
+
+    bg = make_showroom(sw, canvas_h, wall_frac=wall_frac)
     draw = ImageDraw.Draw(bg)
 
     # ── Turntable platform at floor line ─────────────────────────────────────
-    import math
     cx, py = sw // 2, wall_h
     plat_w = int(sw * 0.68)
     plat_h = int(plat_w * 0.14)
@@ -464,26 +473,19 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         oy = py + int((plat_h//2 + 1) * math.sin(rad))
         draw.line([(ix, iy), (ox, oy)], fill=(60, 100, 210, 100), width=1)
 
-    # ── Detect actual car bottom → align to floor line ────────────────────────
-    _alpha = np.array(subject)[:, :, 3]
-    _rows = np.where(_alpha.max(axis=1) > 10)[0]
-    actual_bottom = int(_rows[-1]) + 1 if len(_rows) > 0 else sh
-    car_y = max(0, wall_h - actual_bottom)
-
     # ── Reflection ────────────────────────────────────────────────────────────
-    refl_h = min(int(sh * 0.18), sh - wall_h - 4)
+    refl_h = min(int(canvas_h * 0.16), floor_extra - 4)
     if refl_h > 6:
-        refl = subject.transpose(Image.FLIP_TOP_BOTTOM)
-        fade_arr = np.zeros((sh,), dtype=np.uint8)
-        for fy in range(refl_h):
-            fade_arr[sh - refl_h + fy] = int(45 * (1 - fy / refl_h))
+        refl = subject.crop((0, actual_bottom - refl_h, sw, actual_bottom)).transpose(Image.FLIP_TOP_BOTTOM)
+        refl_canvas = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
+        fade_arr = np.array([int(45 * (1 - i / refl_h)) for i in range(refl_h)], dtype=np.uint8)
         fade_2d = np.tile(fade_arr[:, np.newaxis], (1, sw))
-        refl_rgba = refl.copy()
-        refl_rgba.putalpha(Image.fromarray(fade_2d, 'L'))
-        bg.alpha_composite(refl_rgba.filter(ImageFilter.GaussianBlur(radius=3)))
+        refl.putalpha(Image.fromarray(fade_2d, 'L'))
+        refl_canvas.paste(refl.filter(ImageFilter.GaussianBlur(radius=3)), (0, wall_h))
+        bg.alpha_composite(refl_canvas)
 
-    # ── Car aligned to floor line ─────────────────────────────────────────────
-    bg.paste(subject, (0, car_y), subject)
+    # ── Car at top of canvas, bottom sits exactly on floor line ──────────────
+    bg.paste(subject, (0, 0), subject)
 
     result = add_watermark(bg)
     out = io.BytesIO()
