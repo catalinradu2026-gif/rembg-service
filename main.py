@@ -197,104 +197,126 @@ def remove_bg_from_bytes(image_data: bytes) -> bytes:
 # ── Background compositing ────────────────────────────────────────────────────
 
 def make_showroom(w: int, h: int) -> Image.Image:
-    """zyAI WOW showroom — vectorized numpy, low memory."""
-    from PIL import ImageDraw, ImageFont
+    """zyAI professional showroom — dark background, spotlight cones, 3D zyAI branding."""
+    from PIL import ImageDraw, ImageFont, ImageFilter
 
-    # Work at half resolution then upscale for speed + memory
+    wall_frac = 0.56
+    wall_h = int(h * wall_frac)
+
+    # ── Background at half-res for speed ─────────────────────────────────────
     hw, hh = max(w // 2, 1), max(h // 2, 1)
+    wh_s = int(hh * wall_frac)
     Y, X = np.mgrid[0:hh, 0:hw].astype(np.float32)
     Xn = (X - hw / 2) / (hw / 2)
-    Yn = Y / hh
-    wall_frac = 0.58
-    wall_h_s = int(hh * wall_frac)
 
     pix = np.zeros((hh, hw, 3), dtype=np.float32)
+    wall_m = (Y < wh_s).astype(np.float32)
+    floor_m = 1 - wall_m
 
-    # Spotlight
-    spot = np.exp(-(Xn**2 * 10 + (Yn * 0.75)**2 * 2)) * 85 + \
-           np.exp(-(Xn**2 * 2   + (Yn - 0.05)**2 * 5)) * 30
-    # Side accents
-    left  = np.exp(-((Xn + 1.1)**2 * 2 + Yn**2 * 5)) * 35
-    right = np.exp(-((Xn - 1.1)**2 * 2 + Yn**2 * 5)) * 35
+    # Deep dark base
+    pix[:,:,2] += 14 * wall_m + 10 * floor_m
+    pix[:,:,1] += 7  * wall_m + 6  * floor_m
+    pix[:,:,0] += 4  * wall_m + 4  * floor_m
 
-    wm = (Y < wall_h_s).astype(np.float32)
-    pix[:,:,0] += (spot * 0.5 + left * 0.5 + right * 0.5) * wm
-    pix[:,:,1] += (spot * 0.4 + left * 0.25 + right * 0.25) * wm
-    pix[:,:,2] += (spot * 0.95 + left * 0.9 + right * 0.9) * wm
+    # ── 3 spotlight cones from ceiling ───────────────────────────────────────
+    spots = [
+        (hw * 0.50, (160, 195, 255), 1.0),   # center — hits text
+        (hw * 0.14, (110,  90, 220), 0.65),  # left
+        (hw * 0.86, (110,  90, 220), 0.65),  # right
+    ]
+    for sx, sc, strength in spots:
+        dx = X - sx
+        dy = np.maximum(Y, 0.5)
+        cone = np.exp(-(dx / (dy * 0.30 + 1))**2) * wall_m
+        dist_atten = np.exp(-dy / (hh * 1.1))
+        beam = cone * (0.35 + dist_atten * 0.65) * strength * 95
+        pix[:,:,0] += beam * sc[0] / 255
+        pix[:,:,1] += beam * sc[1] / 255
+        pix[:,:,2] += beam * sc[2] / 255
 
-    fm = 1 - wm
-    ft = np.clip((Y - wall_h_s) / max(hh - wall_h_s, 1), 0, 1)
-    refl = np.exp(-Xn**2 * 5) * np.exp(-ft * 5) * 60
-    pix[:,:,2] += refl * fm
-    pix[:,:,0] += refl * 0.3 * fm
+    # Floor center glow (reflection under car)
+    ft = np.clip((Y - wh_s) / max(hh - wh_s, 1), 0, 1)
+    floor_glow = np.exp(-Xn**2 * 3.5) * np.exp(-ft * 7) * 38
+    pix[:,:,2] += floor_glow * floor_m
+    pix[:,:,0] += floor_glow * 0.35 * floor_m
 
-    vig = np.clip(1 - (Xn**2 * 0.55 + (Yn - 0.45)**2 * 0.35), 0.07, 1)
-    pix *= vig[:,:,np.newaxis]
-
-    # Upscale to full resolution
+    # Upscale
     small = Image.fromarray(np.clip(pix, 0, 255).astype(np.uint8), 'RGB')
     img = small.resize((w, h), Image.BILINEAR).convert('RGBA')
     draw = ImageDraw.Draw(img)
-    wall_h = int(h * wall_frac)
 
-    # Glowing horizon line
-    for dy in range(-3, 4):
-        a = max(0, 190 - abs(dy) * 55)
-        draw.line([(0, wall_h + dy), (w, wall_h + dy)], fill=(60, 110, 255, a))
+    # ── Spotlight fixture halos at ceiling ───────────────────────────────────
+    halo_xs = [int(w * 0.50), int(w * 0.14), int(w * 0.86)]
+    halo_cols = [(160, 200, 255), (110, 90, 220), (110, 90, 220)]
+    for hx, hc in zip(halo_xs, halo_cols):
+        r = max(10, int(w * 0.022))
+        for ring in range(5, 0, -1):
+            rr = r * ring
+            draw.ellipse([(hx - rr, -rr // 2), (hx + rr, rr // 2)], fill=(*hc, max(4, 28 // ring)))
+        draw.ellipse([(hx - r // 2, 0), (hx + r // 2, r)], fill=(*hc, 220))
 
-    # Neon side lines
-    for dx in [int(w * 0.04), int(w * 0.96)]:
-        draw.line([(dx, int(wall_h * 0.08)), (dx, wall_h)], fill=(70, 50, 240, 90), width=2)
+    # ── Horizon glow ─────────────────────────────────────────────────────────
+    for dy in range(-4, 5):
+        a = max(0, 210 - abs(dy) * 50)
+        draw.line([(0, wall_h + dy), (w, wall_h + dy)], fill=(70, 120, 255, a))
 
-    # Floor grid
+    # ── Neon frame lines ─────────────────────────────────────────────────────
+    for side_x in [int(w * 0.03), int(w * 0.97)]:
+        draw.line([(side_x, 2), (side_x, wall_h - 2)], fill=(85, 55, 235, 80), width=2)
+
+    # ── Floor perspective grid ────────────────────────────────────────────────
     vp = w // 2
-    for i in range(1, 8):
-        fy = wall_h + int((h - wall_h) * (i / 7)**0.6)
-        draw.line([(0, fy), (w, fy)], fill=(45, 75, 195, max(8, 50 - i * 6)))
-    for xp in range(-120, 121, 20):
-        draw.line([(vp, wall_h), (vp + int(w * xp / 100), h)], fill=(38, 62, 185, 25))
+    for i in range(1, 9):
+        fy = wall_h + int((h - wall_h) * (i / 8) ** 0.52)
+        draw.line([(0, fy), (w, fy)], fill=(45, 75, 200, max(5, 42 - i * 5)))
+    for xp in range(-130, 131, 18):
+        draw.line([(vp, wall_h), (vp + int(w * xp / 100), h)], fill=(38, 62, 185, 18))
 
-    # zyAI.ro — litere volumetrice 3D pe peretele din spate
-    from PIL import ImageFilter
-    fs = max(48, int(w * 0.13))
+    # ── zyAI — 3D volumetric text on back wall ────────────────────────────────
+    fs = max(64, int(w * 0.16))
     try:
         fnt = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", fs)
     except Exception:
         fnt = ImageFont.load_default()
-    txt = "zyAI.ro"
-    bb_tmp = ImageDraw.Draw(Image.new('RGBA', (1, 1))).textbbox((0, 0), txt, font=fnt)
-    tw, th = bb_tmp[2] - bb_tmp[0] + 60, bb_tmp[3] - bb_tmp[1] + 60
-    pad = 30
 
-    # 1. Glow difuz în spate
-    glow = Image.new('RGBA', (tw, th), (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow)
-    gd.text((pad, pad), txt, font=fnt, fill=(60, 120, 255, 200))
-    glow = glow.filter(ImageFilter.GaussianBlur(radius=14))
+    txt = "zyAI"
+    tmp = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
+    bb = tmp.textbbox((0, 0), txt, font=fnt)
+    tw, th = bb[2] - bb[0], bb[3] - bb[1]
+    pad = 40
+    cw, ch = tw + pad * 2 + 25, th + pad * 2 + 25
 
-    # 2. Extruziune 3D — straturi offset spre dreapta-jos (efect volum)
-    vol = Image.new('RGBA', (tw, th), (0, 0, 0, 0))
-    vd = ImageDraw.Draw(vol)
-    depth = max(4, int(fs * 0.06))
+    # Layer 1: wide outer glow (electric blue)
+    g_out = Image.new('RGBA', (cw, ch), (0, 0, 0, 0))
+    ImageDraw.Draw(g_out).text((pad, pad), txt, font=fnt, fill=(70, 105, 255, 170))
+    g_out = g_out.filter(ImageFilter.GaussianBlur(radius=22))
+
+    # Layer 2: tight inner glow
+    g_in = Image.new('RGBA', (cw, ch), (0, 0, 0, 0))
+    ImageDraw.Draw(g_in).text((pad, pad), txt, font=fnt, fill=(140, 175, 255, 200))
+    g_in = g_in.filter(ImageFilter.GaussianBlur(radius=7))
+
+    # Layer 3: 3D extrusion (shadow layers going bottom-right)
+    ext = Image.new('RGBA', (cw, ch), (0, 0, 0, 0))
+    ed = ImageDraw.Draw(ext)
+    depth = max(6, int(fs * 0.08))
     for i in range(depth, 0, -1):
-        alpha_vol = int(60 + i * 8)
-        vd.text((pad + i, pad + i), txt, font=fnt, fill=(20, 40, 140, alpha_vol))
+        c = int(15 + i * 7)
+        ed.text((pad + i, pad + i), txt, font=fnt, fill=(c, c + 18, min(c * 4, 170), 190))
 
-    # 3. Fața principală a literelor — alb-albastru luminos
-    face = Image.new('RGBA', (tw, th), (0, 0, 0, 0))
+    # Layer 4: main face — bright white-blue
+    face = Image.new('RGBA', (cw, ch), (0, 0, 0, 0))
     fd = ImageDraw.Draw(face)
-    fd.text((pad, pad), txt, font=fnt, fill=(200, 220, 255, 240))
+    fd.text((pad, pad), txt, font=fnt, fill=(215, 232, 255, 255))
+    fd.text((pad, pad - 1), txt, font=fnt, fill=(255, 255, 255, 130))  # top highlight
+    fd.text((pad - 1, pad), txt, font=fnt, fill=(255, 255, 255, 60))   # left highlight
 
-    # 4. Highlight fin pe marginea de sus (iluminare)
-    fd.text((pad, pad - 1), txt, font=fnt, fill=(255, 255, 255, 80))
+    combined = Image.new('RGBA', (cw, ch), (0, 0, 0, 0))
+    for layer in [g_out, g_in, ext, face]:
+        combined = Image.alpha_composite(combined, layer)
 
-    # Compozit final
-    combined = Image.alpha_composite(glow, vol)
-    combined = Image.alpha_composite(combined, face)
-
-    # Poziționare pe perete, centrat, la ~25% din înălțimea peretelui
-    px = (w - tw) // 2
-    py = int(wall_h * 0.18)
+    px = max(0, (w - cw) // 2)
+    py = max(2, int(wall_h * 0.14))
     img.alpha_composite(combined, (px, py))
 
     return img
