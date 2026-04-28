@@ -440,35 +440,33 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
 
     import math
 
-    # Detect actual_bottom: last row with >= 3% pixels having alpha > 40
-    # Detect actual_top: first row with >= 3% pixels having alpha > 40
-    _a = np.array(subject)[:, :, 3]
-    _row_fill = (_a > 40).sum(axis=1)
-    _sig = np.where(_row_fill > sw * 0.03)[0]
-    actual_bottom = int(_sig[-1]) + 1 if len(_sig) > 0 else sh
-    actual_top = int(_sig[0]) if len(_sig) > 0 else 0
-    car_height = actual_bottom - actual_top
-    floor_extra = int(sw * 0.15)
-    # Platform 4% above actual_bottom so wheels overlap platform naturally
-    wall_h = max(10, actual_bottom - int(actual_bottom * 0.04))
-    canvas_h = actual_bottom + floor_extra
-    wall_frac = wall_h / canvas_h
-    print(f"[composite] sw={sw} sh={sh} actual_bottom={actual_bottom} floor_extra={floor_extra}")
+    # Detect car bounding box via PIL (most reliable method)
+    alpha_ch = subject.getchannel('A')
+    bbox = alpha_ch.point(lambda p: 255 if p > 30 else 0).getbbox()
+    actual_top    = bbox[1] if bbox else 0
+    actual_bottom = bbox[3] if bbox else sh
+    car_height    = actual_bottom - actual_top
+
+    floor_extra = int(sw * 0.18)
+    wall_h      = actual_bottom  # platform exactly at car bottom
+    canvas_h    = actual_bottom + floor_extra
+    wall_frac   = wall_h / canvas_h
+    print(f"[composite] sw={sw} sh={sh} bbox={bbox} wall_h={wall_h} canvas_h={canvas_h}")
 
     bg = make_showroom(sw, canvas_h, wall_frac=wall_frac)
     draw = ImageDraw.Draw(bg)
 
-    # ── Contact shadow — anchors car visually to floor ────────────────────────
+    # ── Large contact shadow — critical for grounding the car ─────────────────
     shadow_layer = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shadow_layer)
-    scx, sy = sw // 2, wall_h
-    for i in range(10, 0, -1):
-        srw = int(sw * 0.60 * i / 10)
-        srh = max(4, int(srw * 0.07 * i / 10))
-        sa = int(80 * (i / 10) ** 1.5)
-        sd.ellipse([(scx - srw//2, sy - srh//2), (scx + srw//2, sy + srh//2)],
-                   fill=(5, 10, 40, sa))
-    bg.alpha_composite(shadow_layer.filter(ImageFilter.GaussianBlur(radius=10)))
+    scx = sw // 2
+    for i in range(12, 0, -1):
+        srw = int(sw * 0.82 * i / 12)
+        srh = max(6, int(srw * 0.09 * i / 12))
+        sa  = int(110 * (i / 12) ** 1.3)
+        sd.ellipse([(scx - srw//2, wall_h - srh//2),
+                    (scx + srw//2, wall_h + srh//2)], fill=(3, 8, 35, sa))
+    bg.alpha_composite(shadow_layer.filter(ImageFilter.GaussianBlur(radius=14)))
 
     # ── Turntable platform at floor line ─────────────────────────────────────
     cx, py = sw // 2, wall_h
