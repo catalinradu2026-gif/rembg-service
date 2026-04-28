@@ -268,15 +268,33 @@ def make_showroom(w: int, h: int) -> Image.Image:
     img = small.resize((w, h), Image.BILINEAR).convert('RGBA')
     draw = ImageDraw.Draw(img)
 
-    # ── Spotlight halos ───────────────────────────────────────────────────────
-    halo_xs  = [int(w * 0.50), int(w * 0.15), int(w * 0.85)]
-    halo_col = [(200, 220, 255), (130, 100, 240), (130, 100, 240)]
-    for hx, hc in zip(halo_xs, halo_col):
-        r = max(10, int(w * 0.020))
-        for ring in range(5, 0, -1):
-            rr = r * ring
-            draw.ellipse([(hx-rr, -rr//2), (hx+rr, rr//2)], fill=(*hc, max(4, 26//ring)))
-        draw.ellipse([(hx-r//2, 0), (hx+r//2, r)], fill=(*hc, 225))
+    # ── Projector spotlights ──────────────────────────────────────────────────
+    spot_xs = [int(w * 0.15), int(w * 0.50), int(w * 0.85)]
+    for sx in spot_xs:
+        # Soft cone of light via numpy horizontal lines
+        cone_arr = np.zeros((h, w, 4), dtype=np.uint8)
+        for cy in range(0, wall_h):
+            frac = cy / max(wall_h, 1)
+            hw_cone = max(1, int(frac * w * 0.12))
+            x0 = max(0, sx - hw_cone)
+            x1 = min(w - 1, sx + hw_cone)
+            alpha = int(40 * (1 - frac * 0.55))
+            cone_arr[cy, x0:x1+1] = [180, 210, 255, alpha]
+        cone_layer = Image.fromarray(cone_arr, 'RGBA').filter(ImageFilter.GaussianBlur(radius=7))
+        img.alpha_composite(cone_layer)
+
+        # Fixture housing
+        fh = max(14, int(h * 0.026))
+        fw = max(22, int(w * 0.030))
+        draw.rectangle([(sx - fw//2, 0), (sx + fw//2, fh)], fill=(32, 37, 58, 245))
+        draw.polygon([(sx - fw//2, fh), (sx + fw//2, fh), (sx, fh + int(fh * 0.55))],
+                     fill=(42, 48, 72, 230))
+        # Lens
+        lr = max(5, int(w * 0.009))
+        for gr in range(4, 0, -1):
+            grr = lr + gr * 3
+            draw.ellipse([(sx-grr, fh-grr//3), (sx+grr, fh+grr)], fill=(180, 215, 255, 18*gr))
+        draw.ellipse([(sx-lr, fh-lr//3), (sx+lr, fh+lr)], fill=(230, 245, 255, 255))
 
     # ── Neon blue horizon line ────────────────────────────────────────────────
     for dy in range(-4, 5):
