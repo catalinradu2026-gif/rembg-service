@@ -425,6 +425,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_cors()
             self.end_headers()
             self.wfile.write(body)
+        elif self.path == "/debug-clipdrop":
+            clipdrop_key = os.environ.get("CLIPDROP_KEY", "")
+            result = {"key_set": bool(clipdrop_key), "key_prefix": clipdrop_key[:8] if clipdrop_key else ""}
+            try:
+                test_url = "https://www.gstatic.com/webp/gallery/1.jpg"
+                with urllib.request.urlopen(test_url, timeout=10) as r:
+                    test_data = r.read()
+                result["input_bytes"] = len(test_data)
+                out = remove_bg_clipdrop(test_data)
+                result["ok"] = True
+                result["output_bytes"] = len(out)
+            except Exception as e:
+                result["ok"] = False
+                result["error"] = str(e)[:300]
+            self._json(200, result)
         elif self.path == "/debug-hf":
             import urllib.error as _ue
             hf_token = os.environ.get("HF_TOKEN", "")
