@@ -449,8 +449,9 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     actual_top = int(_sig[0]) if len(_sig) > 0 else 0
     car_height = actual_bottom - actual_top
     floor_extra = int(sw * 0.15)
+    # Platform 4% above actual_bottom so wheels overlap platform naturally
+    wall_h = max(10, actual_bottom - int(actual_bottom * 0.04))
     canvas_h = actual_bottom + floor_extra
-    wall_h = actual_bottom
     wall_frac = wall_h / canvas_h
     print(f"[composite] sw={sw} sh={sh} actual_bottom={actual_bottom} floor_extra={floor_extra}")
 
