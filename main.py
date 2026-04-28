@@ -419,7 +419,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             has_clipdrop = bool(os.environ.get("CLIPDROP_KEY", ""))
-body = json.dumps({"ok": True, "model": "clipdrop+hf+grabcut" if has_clipdrop else "hf+grabcut"}).encode()
+            body = json.dumps({"ok": True, "model": "clipdrop+hf+grabcut" if has_clipdrop else "hf+grabcut"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
