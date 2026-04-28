@@ -421,7 +421,7 @@ def add_watermark(img: Image.Image) -> Image.Image:
 
 
 def composite_image(subject_png: bytes, category: str) -> bytes:
-    from PIL import ImageFilter
+    from PIL import ImageFilter, ImageDraw
 
     subject = Image.open(io.BytesIO(subject_png)).convert('RGBA')
     cat_lower = (category or '').lower()
