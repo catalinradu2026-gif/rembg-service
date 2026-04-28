@@ -162,8 +162,33 @@ def remove_bg_hf(image_data: bytes) -> bytes:
     raise ValueError("HF RMBG all attempts failed")
 
 
+def remove_bg_photoroom(image_data: bytes) -> bytes:
+    """Remove background using PhotoRoom API — 150 free/month, full resolution."""
+    api_key = os.environ.get("PHOTOROOM_KEY", "")
+    if not api_key:
+        raise ValueError("no PHOTOROOM_KEY")
+    r = req_lib.post(
+        'https://sdk.photoroom.com/v1/segment',
+        files={'image_file': ('image.jpg', image_data, 'image/jpeg')},
+        headers={'x-api-key': api_key},
+        timeout=30,
+    )
+    if not r.ok:
+        raise ValueError(f"photoroom {r.status_code}: {r.text[:150]}")
+    if len(r.content) < 1000:
+        raise ValueError(f"photoroom too small: {len(r.content)} bytes")
+    print(f"PhotoRoom ok: {len(r.content)} bytes")
+    return r.content
+
+
 def remove_bg_from_bytes(image_data: bytes) -> bytes:
-    # Try remove.bg first (ML quality, 50/month free)
+    # Try PhotoRoom first (ML quality, 150/month)
+    try:
+        return remove_bg_photoroom(image_data)
+    except Exception as e:
+        print(f"PhotoRoom failed ({e}), trying remove.bg...")
+
+    # Try remove.bg (50/month)
     try:
         return remove_bg_removebg(image_data)
     except Exception as e:
@@ -468,8 +493,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
+            has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
-            body = json.dumps({"ok": True, "model": "removebg+hf+grabcut" if has_rbg else "hf+grabcut"}).encode()
+            model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
+            body = json.dumps({"ok": True, "model": model}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
