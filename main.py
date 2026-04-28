@@ -464,20 +464,26 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         oy = py + int((plat_h//2 + 1) * math.sin(rad))
         draw.line([(ix, iy), (ox, oy)], fill=(60, 100, 210, 100), width=1)
 
+    # ── Detect actual car bottom → align to floor line ────────────────────────
+    _alpha = np.array(subject)[:, :, 3]
+    _rows = np.where(_alpha.max(axis=1) > 10)[0]
+    actual_bottom = int(_rows[-1]) + 1 if len(_rows) > 0 else sh
+    car_y = max(0, wall_h - actual_bottom)
+
     # ── Reflection ────────────────────────────────────────────────────────────
-    refl_h = min(int(sh * 0.20), sh - wall_h - 4)
+    refl_h = min(int(sh * 0.18), sh - wall_h - 4)
     if refl_h > 6:
         refl = subject.transpose(Image.FLIP_TOP_BOTTOM)
         fade_arr = np.zeros((sh,), dtype=np.uint8)
         for fy in range(refl_h):
-            fade_arr[sh - refl_h + fy] = int(50 * (1 - fy / refl_h))
+            fade_arr[sh - refl_h + fy] = int(45 * (1 - fy / refl_h))
         fade_2d = np.tile(fade_arr[:, np.newaxis], (1, sw))
         refl_rgba = refl.copy()
         refl_rgba.putalpha(Image.fromarray(fade_2d, 'L'))
         bg.alpha_composite(refl_rgba.filter(ImageFilter.GaussianBlur(radius=3)))
 
-    # ── Car fills canvas (floor visible through car transparency) ─────────────
-    bg.paste(subject, (0, 0), subject)
+    # ── Car aligned to floor line ─────────────────────────────────────────────
+    bg.paste(subject, (0, car_y), subject)
 
     result = add_watermark(bg)
     out = io.BytesIO()
