@@ -98,22 +98,23 @@ def resize_for_hf(image_data: bytes, max_side: int = 800) -> bytes:
         return image_data
 
 
-def remove_bg_photoroom(image_data: bytes) -> bytes:
-    """Remove background using PhotoRoom API — 150 free/month."""
-    api_key = os.environ.get("PHOTOROOM_KEY", "")
+def remove_bg_removebg(image_data: bytes) -> bytes:
+    """Remove background using remove.bg API — 50 free/month, full resolution."""
+    api_key = os.environ.get("REMOVEBG_KEY", "")
     if not api_key:
-        raise ValueError("no PHOTOROOM_KEY")
+        raise ValueError("no REMOVEBG_KEY")
     r = req_lib.post(
-        'https://sdk.photoroom.com/v1/segment',
+        'https://api.remove.bg/v1.0/removebg',
         files={'image_file': ('image.jpg', image_data, 'image/jpeg')},
-        headers={'x-api-key': api_key},
+        data={'size': 'auto'},
+        headers={'X-Api-Key': api_key},
         timeout=30,
     )
     if not r.ok:
-        raise ValueError(f"photoroom {r.status_code}: {r.text[:150]}")
+        raise ValueError(f"removebg {r.status_code}: {r.text[:150]}")
     if len(r.content) < 1000:
-        raise ValueError(f"photoroom response too small: {len(r.content)} bytes")
-    print(f"PhotoRoom ok: {len(r.content)} bytes")
+        raise ValueError(f"removebg response too small: {len(r.content)} bytes")
+    print(f"remove.bg ok: {len(r.content)} bytes")
     return r.content
 
 
@@ -162,11 +163,11 @@ def remove_bg_hf(image_data: bytes) -> bytes:
 
 
 def remove_bg_from_bytes(image_data: bytes) -> bytes:
-    # Try PhotoRoom first (ML quality, 150/month free)
+    # Try remove.bg first (ML quality, 50/month free)
     try:
-        return remove_bg_photoroom(image_data)
+        return remove_bg_removebg(image_data)
     except Exception as e:
-        print(f"PhotoRoom failed ({e}), trying HF...")
+        print(f"remove.bg failed ({e}), trying HF...")
 
     # Try HF RMBG
     try:
@@ -418,22 +419,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
-            body = json.dumps({"ok": True, "model": "photoroom+hf+grabcut" if has_pr else "hf+grabcut"}).encode()
+            has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
+            body = json.dumps({"ok": True, "model": "removebg+hf+grabcut" if has_rbg else "hf+grabcut"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
             self.end_headers()
             self.wfile.write(body)
         elif self.path == "/debug-clipdrop":
-            pr_key = os.environ.get("PHOTOROOM_KEY", "")
-            result = {"key_set": bool(pr_key), "key_prefix": pr_key[:8] if pr_key else ""}
+            rbg_key = os.environ.get("REMOVEBG_KEY", "")
+            result = {"key_set": bool(rbg_key), "key_prefix": rbg_key[:8] if rbg_key else ""}
             try:
                 test_url = "https://www.gstatic.com/webp/gallery/1.jpg"
                 with urllib.request.urlopen(test_url, timeout=10) as r:
                     test_data = r.read()
                 result["input_bytes"] = len(test_data)
-                out = remove_bg_photoroom(test_data)
+                out = remove_bg_removebg(test_data)
                 result["ok"] = True
                 result["output_bytes"] = len(out)
             except Exception as e:
