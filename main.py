@@ -81,19 +81,44 @@ def grabcut_mask(img):
 
 
 def remove_bg_hf(image_data: bytes) -> bytes:
-    """Remove background using Hugging Face RMBG-2.0 (ML quality, free)."""
-    import urllib.request
-    api_url = "https://api-inference.huggingface.co/models/briaai/RMBG-2.0"
-    req = urllib.request.Request(api_url, data=image_data, method='POST')
-    req.add_header('Content-Type', 'image/jpeg')
+    """Remove background using Hugging Face RMBG (ML quality, free tier)."""
+    import urllib.error, time, json as _json
     hf_token = os.environ.get("HF_TOKEN", "")
-    if hf_token:
-        req.add_header('Authorization', f'Bearer {hf_token}')
-    with urllib.request.urlopen(req, timeout=30) as r:
-        result = r.read()
-    if len(result) < 100:
-        raise ValueError("HF returned empty response")
-    return result
+    models = [
+        "https://api-inference.huggingface.co/models/briaai/RMBG-1.4",
+        "https://api-inference.huggingface.co/models/briaai/RMBG-2.0",
+    ]
+    for model_url in models:
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(model_url, data=image_data, method='POST')
+                req.add_header('Content-Type', 'image/jpeg')
+                if hf_token:
+                    req.add_header('Authorization', f'Bearer {hf_token}')
+                with urllib.request.urlopen(req, timeout=50) as r:
+                    result = r.read()
+                if len(result) > 1000:
+                    print(f"HF RMBG success with {model_url} attempt {attempt+1}")
+                    return result
+                raise ValueError(f"HF response too small: {len(result)} bytes")
+            except urllib.error.HTTPError as e:
+                body = e.read().decode('utf-8', errors='ignore')
+                if e.code == 503:
+                    wait = 20
+                    try:
+                        wait = min(int(_json.loads(body).get('estimated_time', 20)), 35)
+                    except Exception:
+                        pass
+                    print(f"HF model loading, waiting {wait}s...")
+                    time.sleep(wait)
+                    continue
+                print(f"HF HTTP {e.code} from {model_url}: {body[:120]}")
+                break  # try next model
+            except Exception as ex:
+                print(f"HF attempt {attempt+1} failed: {ex}")
+                if attempt < 2:
+                    time.sleep(5)
+    raise ValueError("HF RMBG all attempts failed")
 
 
 def remove_bg_from_bytes(image_data: bytes) -> bytes:
