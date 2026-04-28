@@ -443,25 +443,24 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
 
     # ── Auto showroom ─────────────────────────────────────────────────────────
     sw, sh = subject.size
-    MAX_SIDE = 1100
-    if max(sw, sh) > MAX_SIDE:
-        s = MAX_SIDE / max(sw, sh)
+    # Limit car to 900px max side
+    if max(sw, sh) > 900:
+        s = 900 / max(sw, sh)
         sw, sh = int(sw * s), int(sh * s)
         subject = subject.resize((sw, sh), Image.LANCZOS)
 
-    # Canvas: car width + 20% padding each side, height + 30% for floor/ceiling
-    CANVAS_W = int(sw * 1.40)
-    CANVAS_H = int(sh * 1.38)
-    WALL_FRAC = 0.70  # 70% wall, 30% floor — less empty floor
-    wall_h = int(CANVAS_H * WALL_FRAC)
+    # Canvas guarantees car fits in wall: wall_h = sh * 1.56 * 0.73 = sh * 1.14 > sh
+    CANVAS_W = int(sw * 1.44)
+    CANVAS_H = int(sh * 1.56)
+    WALL_FRAC = 0.73
+    wall_h = int(CANVAS_H * WALL_FRAC)  # always > sh
 
     bg = make_showroom(CANVAS_W, CANVAS_H)
     draw = ImageDraw.Draw(bg)
 
-    # Car position: centered, bottom at floor line
+    # Car: centered X, bottom exactly at floor line
     car_x = (CANVAS_W - sw) // 2
-    car_y = wall_h - sh
-    car_y = max(int(CANVAS_H * 0.05), car_y)
+    car_y = wall_h - sh  # always >= 0 by design
 
     # ── Turntable platform under car ─────────────────────────────────────────
     cx = CANVAS_W // 2
