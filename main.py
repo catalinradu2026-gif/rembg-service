@@ -440,10 +440,11 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
 
     import math
 
-    # Find actual bottom pixel of car (ignore semi-transparent artifacts from JPEG)
+    # Find actual bottom: last row with at least 2% solid pixels (ignores noise)
     _a = np.array(subject)[:, :, 3]
-    _rows = np.where(_a.max(axis=1) > 30)[0]
-    actual_bottom = int(_rows[-1]) + 1 if len(_rows) > 0 else sh
+    _row_fill = (_a > 40).sum(axis=1)
+    _sig = np.where(_row_fill > sw * 0.02)[0]
+    actual_bottom = int(_sig[-1]) + 1 if len(_sig) > 0 else sh
     print(f"[composite] sw={sw} sh={sh} actual_bottom={actual_bottom}")
 
     # Canvas: actual car area + floor strip below
