@@ -65,8 +65,10 @@ def grabcut_mask(img):
     img_enh = cv2.cvtColor(cv2.merge([clahe.apply(l), a, b]), cv2.COLOR_LAB2BGR)
     mask = np.zeros((h, w), np.uint8)
     bgd, fgd = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
-    mx, my = int(w * 0.06), int(h * 0.06)
-    cv2.grabCut(img_enh, mask, (mx, my, w - 2*mx, h - 2*my), bgd, fgd, 3, cv2.GC_INIT_WITH_RECT)
+    mx = int(w * 0.04)
+    my_top = int(h * 0.04)
+    my_bot = int(h * 0.01)  # very small bottom margin to keep wheels
+    cv2.grabCut(img_enh, mask, (mx, my_top, w - 2*mx, h - my_top - my_bot), bgd, fgd, 3, cv2.GC_INIT_WITH_RECT)
     alpha = np.where((mask == 2) | (mask == 0), 0, 255).astype(np.uint8)
     k1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (4, 4))
@@ -157,28 +159,48 @@ def make_showroom(w: int, h: int) -> Image.Image:
     for xp in range(-120, 121, 20):
         draw.line([(vp, wall_h), (vp + int(w * xp / 100), h)], fill=(38, 62, 185, 25))
 
-    # zyAI.ro floor branding — perspectivă, imprimat pe podea
-    fs = max(36, int(w * 0.11))
+    # zyAI.ro — litere volumetrice 3D pe peretele din spate
+    from PIL import ImageFilter
+    fs = max(48, int(w * 0.13))
     try:
         fnt = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", fs)
     except Exception:
         fnt = ImageFont.load_default()
     txt = "zyAI.ro"
-    # Desenăm textul pe suprafață separată
     bb_tmp = ImageDraw.Draw(Image.new('RGBA', (1, 1))).textbbox((0, 0), txt, font=fnt)
-    tw, th = bb_tmp[2] - bb_tmp[0] + 20, bb_tmp[3] - bb_tmp[1] + 20
-    txt_surf = Image.new('RGBA', (tw, th), (0, 0, 0, 0))
-    td = ImageDraw.Draw(txt_surf)
-    # Umbra
-    td.text((8, 8), txt, font=fnt, fill=(0, 10, 60, 80))
-    # Text principal — albastru neon subtil
-    td.text((6, 6), txt, font=fnt, fill=(90, 140, 255, 95))
-    # Perspectivă: comprimăm vertical pentru efect de podea
-    persp_h = max(1, int(th * 0.38))
-    txt_floor = txt_surf.resize((tw, persp_h), Image.LANCZOS)
+    tw, th = bb_tmp[2] - bb_tmp[0] + 60, bb_tmp[3] - bb_tmp[1] + 60
+    pad = 30
+
+    # 1. Glow difuz în spate
+    glow = Image.new('RGBA', (tw, th), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    gd.text((pad, pad), txt, font=fnt, fill=(60, 120, 255, 200))
+    glow = glow.filter(ImageFilter.GaussianBlur(radius=14))
+
+    # 2. Extruziune 3D — straturi offset spre dreapta-jos (efect volum)
+    vol = Image.new('RGBA', (tw, th), (0, 0, 0, 0))
+    vd = ImageDraw.Draw(vol)
+    depth = max(4, int(fs * 0.06))
+    for i in range(depth, 0, -1):
+        alpha_vol = int(60 + i * 8)
+        vd.text((pad + i, pad + i), txt, font=fnt, fill=(20, 40, 140, alpha_vol))
+
+    # 3. Fața principală a literelor — alb-albastru luminos
+    face = Image.new('RGBA', (tw, th), (0, 0, 0, 0))
+    fd = ImageDraw.Draw(face)
+    fd.text((pad, pad), txt, font=fnt, fill=(200, 220, 255, 240))
+
+    # 4. Highlight fin pe marginea de sus (iluminare)
+    fd.text((pad, pad - 1), txt, font=fnt, fill=(255, 255, 255, 80))
+
+    # Compozit final
+    combined = Image.alpha_composite(glow, vol)
+    combined = Image.alpha_composite(combined, face)
+
+    # Poziționare pe perete, centrat, la ~25% din înălțimea peretelui
     px = (w - tw) // 2
-    py = wall_h + int((h - wall_h) * 0.52)
-    img.alpha_composite(txt_floor, (px, py))
+    py = int(wall_h * 0.18)
+    img.alpha_composite(combined, (px, py))
 
     return img
 
