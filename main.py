@@ -440,18 +440,19 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
 
     import math
 
-    # Find actual bottom: last row with at least 2% solid pixels (ignores noise)
+    # Detect actual_bottom: last row with >= 3% pixels having alpha > 40
+    # Detect actual_top: first row with >= 3% pixels having alpha > 40
     _a = np.array(subject)[:, :, 3]
     _row_fill = (_a > 40).sum(axis=1)
-    _sig = np.where(_row_fill > sw * 0.02)[0]
+    _sig = np.where(_row_fill > sw * 0.03)[0]
     actual_bottom = int(_sig[-1]) + 1 if len(_sig) > 0 else sh
-    print(f"[composite] sw={sw} sh={sh} actual_bottom={actual_bottom}")
-
-    # Canvas: actual car area + floor strip below
-    floor_extra = max(60, int(sw * 0.12))
+    actual_top = int(_sig[0]) if len(_sig) > 0 else 0
+    car_height = actual_bottom - actual_top
+    floor_extra = int(sw * 0.15)
     canvas_h = actual_bottom + floor_extra
     wall_h = actual_bottom
     wall_frac = wall_h / canvas_h
+    print(f"[composite] sw={sw} sh={sh} actual_bottom={actual_bottom} floor_extra={floor_extra}")
 
     bg = make_showroom(sw, canvas_h, wall_frac=wall_frac)
     draw = ImageDraw.Draw(bg)
@@ -477,9 +478,9 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         draw.line([(ix, iy), (ox, oy)], fill=(60, 100, 210, 100), width=1)
 
     # ── Reflection ────────────────────────────────────────────────────────────
-    refl_h = min(int(sh * 0.18), floor_extra - 4)
+    refl_h = min(int(car_height * 0.15), floor_extra - 10)
     if refl_h > 6:
-        refl = subject.crop((0, sh - refl_h, sw, sh)).transpose(Image.FLIP_TOP_BOTTOM)
+        refl = subject.crop((0, actual_bottom - refl_h, sw, actual_bottom)).transpose(Image.FLIP_TOP_BOTTOM)
         refl_canvas = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
         fade_arr = np.array([int(40 * (1 - i / refl_h)) for i in range(refl_h)], dtype=np.uint8)
         fade_2d = np.tile(fade_arr[:, np.newaxis], (1, sw))
@@ -487,7 +488,7 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         refl_canvas.paste(refl.filter(ImageFilter.GaussianBlur(radius=3)), (0, wall_h))
         bg.alpha_composite(refl_canvas)
 
-    # ── Car at (0,0), bottom of image = floor line ────────────────────────────
+    # ── Car at (0,0), bottom of car = actual_bottom = wall_h ─────────────────
     bg.paste(subject, (0, 0), subject)
 
     result = add_watermark(bg)
