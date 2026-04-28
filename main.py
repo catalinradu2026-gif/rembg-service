@@ -443,75 +443,50 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
 
     # ── Auto showroom ─────────────────────────────────────────────────────────
     sw, sh = subject.size
-    # Limit car to 900px max side
-    if max(sw, sh) > 900:
-        s = 900 / max(sw, sh)
+    if max(sw, sh) > 1100:
+        s = 1100 / max(sw, sh)
         sw, sh = int(sw * s), int(sh * s)
         subject = subject.resize((sw, sh), Image.LANCZOS)
 
-    # Canvas guarantees car fits in wall: wall_h = sh * 1.56 * 0.73 = sh * 1.14 > sh
-    CANVAS_W = int(sw * 1.44)
-    CANVAS_H = int(sh * 1.56)
-    WALL_FRAC = 0.73
-    wall_h = int(CANVAS_H * WALL_FRAC)  # always > sh
-
-    bg = make_showroom(CANVAS_W, CANVAS_H)
+    wall_h = int(sh * 0.58)
+    bg = make_showroom(sw, sh)
     draw = ImageDraw.Draw(bg)
 
-    # Find actual bottom of car (lowest non-transparent pixel row)
-    alpha_arr = np.array(subject)[:, :, 3]
-    rows = np.where(alpha_arr.max(axis=1) > 8)[0]
-    actual_bottom = int(rows[-1]) if len(rows) > 0 else sh - 1
-    bottom_pad = sh - actual_bottom - 1  # transparent pixels below car
-
-    # Car: centered X, actual car bottom exactly at floor line
-    car_x = (CANVAS_W - sw) // 2
-    car_y = wall_h - sh + bottom_pad
-
-    # ── Turntable platform under car ─────────────────────────────────────────
-    cx = CANVAS_W // 2
-    py = wall_h
-    plat_w = int(sw * 0.72)
-    plat_h = int(plat_w * 0.16)
-    # Outer glow rings
-    for ring in range(4, 0, -1):
-        rw = plat_w + ring * 12
-        rh = plat_h + ring * 4
-        draw.ellipse([(cx - rw//2, py - rh//2), (cx + rw//2, py + rh//2)],
-                     fill=(40, 70, 200, 18 * ring))
-    # Platform body (dark metallic)
-    draw.ellipse([(cx - plat_w//2, py - plat_h//2), (cx + plat_w//2, py + plat_h//2)],
-                 fill=(22, 25, 40, 230))
-    # Rim highlight arc (top = brighter)
-    draw.arc([(cx - plat_w//2, py - plat_h//2), (cx + plat_w//2, py + plat_h//2)],
-             start=190, end=350, fill=(90, 130, 255, 180), width=2)
-    # Rotation tick marks
+    # ── Turntable platform at floor line ─────────────────────────────────────
     import math
-    for deg in range(0, 360, 30):
+    cx, py = sw // 2, wall_h
+    plat_w = int(sw * 0.68)
+    plat_h = int(plat_w * 0.14)
+    for ring in range(4, 0, -1):
+        rw, rh = plat_w + ring*10, plat_h + ring*3
+        draw.ellipse([(cx-rw//2, py-rh//2), (cx+rw//2, py+rh//2)],
+                     fill=(40, 65, 200, 16*ring))
+    draw.ellipse([(cx-plat_w//2, py-plat_h//2), (cx+plat_w//2, py+plat_h//2)],
+                 fill=(18, 22, 38, 235))
+    draw.arc([(cx-plat_w//2, py-plat_h//2), (cx+plat_w//2, py+plat_h//2)],
+             start=185, end=355, fill=(80, 125, 255, 170), width=2)
+    for deg in range(0, 360, 24):
         rad = math.radians(deg)
-        ix = cx + int((plat_w//2 - 6) * math.cos(rad))
+        ix = cx + int((plat_w//2 - 5) * math.cos(rad))
         iy = py + int((plat_h//2 - 2) * math.sin(rad))
-        ox = cx + int((plat_w//2 + 2) * math.cos(rad))
+        ox = cx + int((plat_w//2 + 1) * math.cos(rad))
         oy = py + int((plat_h//2 + 1) * math.sin(rad))
-        draw.line([(ix, iy), (ox, oy)], fill=(70, 110, 220, 120), width=1)
+        draw.line([(ix, iy), (ox, oy)], fill=(60, 100, 210, 100), width=1)
 
-    # ── Reflection on floor ───────────────────────────────────────────────────
-    refl_h = min(int(sh * 0.18), CANVAS_H - wall_h - 4)
+    # ── Reflection ────────────────────────────────────────────────────────────
+    refl_h = min(int(sh * 0.20), sh - wall_h - 4)
     if refl_h > 6:
         refl = subject.transpose(Image.FLIP_TOP_BOTTOM)
-        fade_arr = np.zeros((CANVAS_H,), dtype=np.uint8)
+        fade_arr = np.zeros((sh,), dtype=np.uint8)
         for fy in range(refl_h):
-            fade_arr[wall_h + fy] = int(45 * (1 - fy / refl_h))
-        fade_2d = np.zeros((CANVAS_H, CANVAS_W), dtype=np.uint8)
-        x0 = max(0, car_x); x1 = min(CANVAS_W, car_x + sw)
-        fade_2d[:, x0:x1] = np.tile(fade_arr[:, np.newaxis], (1, x1 - x0))
-        refl_full = Image.new('RGBA', (CANVAS_W, CANVAS_H), (0, 0, 0, 0))
-        refl_full.paste(refl, (car_x, wall_h), refl)
-        refl_full.putalpha(Image.fromarray(fade_2d, 'L'))
-        bg.alpha_composite(refl_full.filter(ImageFilter.GaussianBlur(radius=2)))
+            fade_arr[sh - refl_h + fy] = int(50 * (1 - fy / refl_h))
+        fade_2d = np.tile(fade_arr[:, np.newaxis], (1, sw))
+        refl_rgba = refl.copy()
+        refl_rgba.putalpha(Image.fromarray(fade_2d, 'L'))
+        bg.alpha_composite(refl_rgba.filter(ImageFilter.GaussianBlur(radius=3)))
 
-    # ── Paste car on top ──────────────────────────────────────────────────────
-    bg.paste(subject, (car_x, car_y), subject)
+    # ── Car fills canvas (floor visible through car transparency) ─────────────
+    bg.paste(subject, (0, 0), subject)
 
     result = add_watermark(bg)
     out = io.BytesIO()
