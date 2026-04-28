@@ -98,6 +98,25 @@ def resize_for_hf(image_data: bytes, max_side: int = 800) -> bytes:
         return image_data
 
 
+def remove_bg_clipdrop(image_data: bytes) -> bytes:
+    """Remove background using Clipdrop API (Stability AI) — 100 free/day."""
+    api_key = os.environ.get("CLIPDROP_KEY", "")
+    if not api_key:
+        raise ValueError("no CLIPDROP_KEY")
+    r = req_lib.post(
+        'https://clipdrop-api.co/remove-background/v1',
+        files={'image_file': ('image.jpg', image_data, 'image/jpeg')},
+        headers={'x-api-key': api_key},
+        timeout=30,
+    )
+    if not r.ok:
+        raise ValueError(f"clipdrop {r.status_code}: {r.text[:150]}")
+    if len(r.content) < 1000:
+        raise ValueError(f"clipdrop response too small: {len(r.content)} bytes")
+    print(f"Clipdrop ok: {len(r.content)} bytes")
+    return r.content
+
+
 def remove_bg_hf(image_data: bytes) -> bytes:
     """Remove background using Hugging Face RMBG (ML quality, free tier)."""
     import urllib.error, time, json as _json
@@ -143,7 +162,13 @@ def remove_bg_hf(image_data: bytes) -> bytes:
 
 
 def remove_bg_from_bytes(image_data: bytes) -> bytes:
-    # Try Hugging Face RMBG-2.0 first (ML quality)
+    # Try Clipdrop first (ML quality, 100/day free)
+    try:
+        return remove_bg_clipdrop(image_data)
+    except Exception as e:
+        print(f"Clipdrop failed ({e}), trying HF...")
+
+    # Try HF RMBG
     try:
         return remove_bg_hf(image_data)
     except Exception as e:
