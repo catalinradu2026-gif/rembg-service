@@ -297,7 +297,7 @@ def make_showroom(w: int, h: int) -> Image.Image:
         draw.line([(vp, wall_h), (vp + int(w*xp/100), h)], fill=(38, 62, 185, 18))
 
     # ── zyAI.ro — LED letters on wall ────────────────────────────────────────
-    fs = max(52, int(w * 0.13))
+    fs = max(32, int(w * 0.065))
     try:
         fnt = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", fs)
     except Exception:
@@ -458,9 +458,15 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     bg = make_showroom(CANVAS_W, CANVAS_H)
     draw = ImageDraw.Draw(bg)
 
-    # Car: centered X, bottom exactly at floor line
+    # Find actual bottom of car (lowest non-transparent pixel row)
+    alpha_arr = np.array(subject)[:, :, 3]
+    rows = np.where(alpha_arr.max(axis=1) > 8)[0]
+    actual_bottom = int(rows[-1]) if len(rows) > 0 else sh - 1
+    bottom_pad = sh - actual_bottom - 1  # transparent pixels below car
+
+    # Car: centered X, actual car bottom exactly at floor line
     car_x = (CANVAS_W - sw) // 2
-    car_y = wall_h - sh  # always >= 0 by design
+    car_y = wall_h - sh + bottom_pad
 
     # ── Turntable platform under car ─────────────────────────────────────────
     cx = CANVAS_W // 2
