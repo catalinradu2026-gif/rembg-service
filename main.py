@@ -400,15 +400,35 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif self.path == "/debug-hf":
-            # Test HF RMBG with a small public image
+            import urllib.error as _ue
+            hf_token = os.environ.get("HF_TOKEN", "")
+            results = {"token_set": bool(hf_token), "token_prefix": hf_token[:8] if hf_token else ""}
             try:
                 test_url = "https://www.gstatic.com/webp/gallery/1.jpg"
                 with urllib.request.urlopen(test_url, timeout=10) as r:
                     test_data = r.read()
-                result = remove_bg_hf(test_data)
-                self._json(200, {"ok": True, "hf_bytes": len(result), "input_bytes": len(test_data)})
+                results["input_bytes"] = len(test_data)
+                for model_url in [
+                    "https://api-inference.huggingface.co/models/briaai/RMBG-1.4",
+                    "https://api-inference.huggingface.co/models/briaai/RMBG-2.0",
+                ]:
+                    key = model_url.split("/")[-1]
+                    try:
+                        req = urllib.request.Request(model_url, data=test_data[:50000], method='POST')
+                        req.add_header('Content-Type', 'image/jpeg')
+                        if hf_token:
+                            req.add_header('Authorization', f'Bearer {hf_token}')
+                        with urllib.request.urlopen(req, timeout=45) as r:
+                            body = r.read()
+                        results[key] = {"status": 200, "bytes": len(body)}
+                    except _ue.HTTPError as e:
+                        body = e.read().decode('utf-8', errors='ignore')
+                        results[key] = {"status": e.code, "error": body[:200]}
+                    except Exception as ex:
+                        results[key] = {"error": str(ex)[:200]}
             except Exception as e:
-                self._json(200, {"ok": False, "error": str(e)[:300]})
+                results["fetch_error"] = str(e)[:200]
+            self._json(200, results)
 
     def do_POST(self):
         try:
