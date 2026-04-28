@@ -440,10 +440,15 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
 
     import math
 
-    # Canvas: full car image + floor strip below
+    # Find actual bottom pixel of car (PhotoRoom adds transparent padding)
+    _a = np.array(subject)[:, :, 3]
+    _rows = np.where(_a.max(axis=1) > 8)[0]
+    actual_bottom = int(_rows[-1]) + 1 if len(_rows) > 0 else sh
+
+    # Canvas: actual car height + fixed floor strip below
     floor_extra = int(sw * 0.20)
-    canvas_h = sh + floor_extra
-    wall_h = sh
+    canvas_h = actual_bottom + floor_extra
+    wall_h = actual_bottom
     wall_frac = wall_h / canvas_h
 
     bg = make_showroom(sw, canvas_h, wall_frac=wall_frac)
