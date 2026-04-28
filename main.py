@@ -222,13 +222,13 @@ def remove_bg_from_bytes(image_data: bytes) -> bytes:
 # ── Background compositing ────────────────────────────────────────────────────
 
 def make_showroom(w: int, h: int) -> Image.Image:
-    """zyAI professional showroom — dark background, spotlight cones, 3D zyAI branding."""
+    """zyAI LUXURY showroom — pure black, warm white spotlights, gold accents."""
     from PIL import ImageDraw, ImageFont, ImageFilter
 
     wall_frac = 0.56
     wall_h = int(h * wall_frac)
 
-    # ── Background at half-res for speed ─────────────────────────────────────
+    # ── Background at half-res ────────────────────────────────────────────────
     hw, hh = max(w // 2, 1), max(h // 2, 1)
     wh_s = int(hh * wall_frac)
     Y, X = np.mgrid[0:hh, 0:hw].astype(np.float32)
@@ -238,64 +238,67 @@ def make_showroom(w: int, h: int) -> Image.Image:
     wall_m = (Y < wh_s).astype(np.float32)
     floor_m = 1 - wall_m
 
-    # Deep dark base
-    pix[:,:,2] += 14 * wall_m + 10 * floor_m
-    pix[:,:,1] += 7  * wall_m + 6  * floor_m
-    pix[:,:,0] += 4  * wall_m + 4  * floor_m
+    # Pure black base with subtle warm undertone
+    pix[:,:,0] += 6 * wall_m  + 8  * floor_m
+    pix[:,:,1] += 4 * wall_m  + 5  * floor_m
+    pix[:,:,2] += 5 * wall_m  + 4  * floor_m
 
-    # ── 3 spotlight cones from ceiling ───────────────────────────────────────
+    # ── 3 warm white spotlight cones ─────────────────────────────────────────
     spots = [
-        (hw * 0.50, (160, 195, 255), 1.0),   # center — hits text
-        (hw * 0.14, (110,  90, 220), 0.65),  # left
-        (hw * 0.86, (110,  90, 220), 0.65),  # right
+        (hw * 0.50, (255, 248, 230), 1.00),  # center — main
+        (hw * 0.15, (255, 235, 190), 0.55),  # left accent
+        (hw * 0.85, (255, 235, 190), 0.55),  # right accent
     ]
     for sx, sc, strength in spots:
         dx = X - sx
         dy = np.maximum(Y, 0.5)
-        cone = np.exp(-(dx / (dy * 0.30 + 1))**2) * wall_m
-        dist_atten = np.exp(-dy / (hh * 1.1))
-        beam = cone * (0.35 + dist_atten * 0.65) * strength * 95
+        cone = np.exp(-(dx / (dy * 0.28 + 1))**2) * wall_m
+        beam = cone * strength * 105
         pix[:,:,0] += beam * sc[0] / 255
         pix[:,:,1] += beam * sc[1] / 255
         pix[:,:,2] += beam * sc[2] / 255
 
-    # Floor center glow (reflection under car)
+    # Warm floor glow under car
     ft = np.clip((Y - wh_s) / max(hh - wh_s, 1), 0, 1)
-    floor_glow = np.exp(-Xn**2 * 3.5) * np.exp(-ft * 7) * 38
-    pix[:,:,2] += floor_glow * floor_m
-    pix[:,:,0] += floor_glow * 0.35 * floor_m
+    floor_glow = np.exp(-Xn**2 * 4.5) * np.exp(-ft * 6) * 30
+    pix[:,:,0] += floor_glow * floor_m * 1.1
+    pix[:,:,1] += floor_glow * floor_m * 0.9
+    pix[:,:,2] += floor_glow * floor_m * 0.5
 
-    # Upscale
     small = Image.fromarray(np.clip(pix, 0, 255).astype(np.uint8), 'RGB')
     img = small.resize((w, h), Image.BILINEAR).convert('RGBA')
     draw = ImageDraw.Draw(img)
 
-    # ── Spotlight fixture halos at ceiling ───────────────────────────────────
-    halo_xs = [int(w * 0.50), int(w * 0.14), int(w * 0.86)]
-    halo_cols = [(160, 200, 255), (110, 90, 220), (110, 90, 220)]
-    for hx, hc in zip(halo_xs, halo_cols):
-        r = max(10, int(w * 0.022))
+    # ── Spotlight fixtures (recessed ceiling spots) ───────────────────────────
+    halo_xs  = [int(w * 0.50), int(w * 0.15), int(w * 0.85)]
+    halo_col = [(255, 250, 230), (255, 238, 195), (255, 238, 195)]
+    for hx, hc in zip(halo_xs, halo_col):
+        r = max(9, int(w * 0.018))
         for ring in range(5, 0, -1):
             rr = r * ring
-            draw.ellipse([(hx - rr, -rr // 2), (hx + rr, rr // 2)], fill=(*hc, max(4, 28 // ring)))
-        draw.ellipse([(hx - r // 2, 0), (hx + r // 2, r)], fill=(*hc, 220))
+            draw.ellipse([(hx-rr, -rr//2), (hx+rr, rr//2)], fill=(*hc, max(3, 22//ring)))
+        draw.ellipse([(hx-r//2, 0), (hx+r//2, r)], fill=(*hc, 230))
 
-    # ── Horizon glow ─────────────────────────────────────────────────────────
-    for dy in range(-4, 5):
-        a = max(0, 210 - abs(dy) * 50)
-        draw.line([(0, wall_h + dy), (w, wall_h + dy)], fill=(70, 120, 255, a))
+    # ── Gold horizon line ─────────────────────────────────────────────────────
+    for dy in range(-3, 4):
+        a = max(0, 200 - abs(dy) * 55)
+        draw.line([(0, wall_h+dy), (w, wall_h+dy)], fill=(200, 160, 60, a))
 
-    # ── Neon frame lines ─────────────────────────────────────────────────────
-    for side_x in [int(w * 0.03), int(w * 0.97)]:
-        draw.line([(side_x, 2), (side_x, wall_h - 2)], fill=(85, 55, 235, 80), width=2)
+    # ── Thin gold frame lines on wall ─────────────────────────────────────────
+    for side_x in [int(w * 0.04), int(w * 0.96)]:
+        draw.line([(side_x, int(wall_h*0.06)), (side_x, wall_h-1)],
+                  fill=(180, 140, 50, 65), width=1)
+    # Horizontal top line
+    draw.line([(int(w*0.04), int(wall_h*0.06)), (int(w*0.96), int(wall_h*0.06))],
+              fill=(180, 140, 50, 50), width=1)
 
-    # ── Floor perspective grid ────────────────────────────────────────────────
+    # ── Floor grid (dark gold/amber) ──────────────────────────────────────────
     vp = w // 2
     for i in range(1, 9):
-        fy = wall_h + int((h - wall_h) * (i / 8) ** 0.52)
-        draw.line([(0, fy), (w, fy)], fill=(45, 75, 200, max(5, 42 - i * 5)))
-    for xp in range(-130, 131, 18):
-        draw.line([(vp, wall_h), (vp + int(w * xp / 100), h)], fill=(38, 62, 185, 18))
+        fy = wall_h + int((h - wall_h) * (i / 8)**0.5)
+        draw.line([(0, fy), (w, fy)], fill=(140, 100, 30, max(4, 38 - i*4)))
+    for xp in range(-130, 131, 16):
+        draw.line([(vp, wall_h), (vp + int(w*xp/100), h)], fill=(120, 85, 25, 14))
 
     return img
 
@@ -319,9 +322,9 @@ def draw_floor_text(bg: Image.Image, canvas_w: int, canvas_h: int, wall_h: int) 
     flat = Image.new('RGBA', (tw, th), (0, 0, 0, 0))
     fd = ImageDraw.Draw(flat)
     for i in range(5, 0, -1):
-        fd.text((12 + i, 12 + i), txt, font=fnt, fill=(10, 25, 110, 70 + i * 12))
-    fd.text((12, 12), txt, font=fnt, fill=(85, 140, 255, 210))
-    fd.text((12, 11), txt, font=fnt, fill=(170, 210, 255, 110))
+        fd.text((12 + i, 12 + i), txt, font=fnt, fill=(80, 55, 10, 70 + i * 12))
+    fd.text((12, 12), txt, font=fnt, fill=(200, 155, 50, 200))
+    fd.text((12, 11), txt, font=fnt, fill=(255, 220, 120, 100))
     glow = flat.filter(ImageFilter.GaussianBlur(radius=6))
     flat = Image.alpha_composite(glow, flat)
 
@@ -331,10 +334,10 @@ def draw_floor_text(bg: Image.Image, canvas_w: int, canvas_h: int, wall_h: int) 
     src = np.float32([[0, 0], [tw, 0], [tw, th], [0, th]])
     cx = canvas_w // 2
     floor_h = canvas_h - wall_h
-    far_y  = wall_h + int(floor_h * 0.18)
-    near_y = wall_h + int(floor_h * 0.62)
-    far_hw  = int(canvas_w * 0.13)
-    near_hw = int(canvas_w * 0.34)
+    far_y  = wall_h + int(floor_h * 0.22)
+    near_y = wall_h + int(floor_h * 0.68)
+    far_hw  = int(canvas_w * 0.12)
+    near_hw = int(canvas_w * 0.33)
     dst = np.float32([
         [cx - far_hw,  far_y],
         [cx + far_hw,  far_y],
@@ -409,7 +412,7 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
 
     # Scale car: max 83% canvas width, max 94% wall height
     sw, sh = subject.size
-    scale = min((CANVAS_W * 0.83) / sw, (wall_h * 0.94) / sh, 1.0)
+    scale = min((CANVAS_W * 0.75) / sw, (wall_h * 0.90) / sh, 1.0)
     cw_car = int(sw * scale)
     ch_car = int(sh * scale)
     subject = subject.resize((cw_car, ch_car), Image.LANCZOS)
