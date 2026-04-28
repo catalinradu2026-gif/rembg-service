@@ -80,7 +80,30 @@ def grabcut_mask(img):
     return np.clip(final, 0, 255).astype(np.uint8)
 
 
+def remove_bg_hf(image_data: bytes) -> bytes:
+    """Remove background using Hugging Face RMBG-2.0 (ML quality, free)."""
+    import urllib.request
+    api_url = "https://api-inference.huggingface.co/models/briaai/RMBG-2.0"
+    req = urllib.request.Request(api_url, data=image_data, method='POST')
+    req.add_header('Content-Type', 'image/jpeg')
+    hf_token = os.environ.get("HF_TOKEN", "")
+    if hf_token:
+        req.add_header('Authorization', f'Bearer {hf_token}')
+    with urllib.request.urlopen(req, timeout=30) as r:
+        result = r.read()
+    if len(result) < 100:
+        raise ValueError("HF returned empty response")
+    return result
+
+
 def remove_bg_from_bytes(image_data: bytes) -> bytes:
+    # Try Hugging Face RMBG-2.0 first (ML quality)
+    try:
+        return remove_bg_hf(image_data)
+    except Exception as e:
+        print(f"HF RMBG failed ({e}), falling back to GrabCut")
+
+    # Fallback: GrabCut
     nparr = np.frombuffer(image_data, np.uint8)
     orig = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if orig is None:
