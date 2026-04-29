@@ -278,13 +278,16 @@ def make_showroom(w: int, h: int, wall_frac: float = 0.56) -> Image.Image:
         draw.line([(side_x, int(wall_h*0.05)), (side_x, wall_h)],
                   fill=(70, 50, 240, 85), width=2)
 
-    # ── Floor grid blue ───────────────────────────────────────────────────────
-    vp = w // 2
-    for i in range(1, 9):
-        fy = wall_h + int((h - wall_h) * (i / 8)**0.52)
-        draw.line([(0, fy), (w, fy)], fill=(45, 75, 200, max(5, 44 - i*5)))
-    for xp in range(-130, 131, 16):
-        draw.line([(vp, wall_h), (vp + int(w*xp/100), h)], fill=(38, 62, 185, 18))
+    # ── Floor: gradient only, no perspective grid (grid caused floating illusion)
+    Y_floor, X_floor = np.mgrid[wall_h:h, 0:w].astype(np.float32)
+    ft = np.clip((Y_floor - wall_h) / max(h - wall_h, 1), 0, 1)
+    Xnf = (X_floor - w / 2) / (w / 2)
+    floor_glow = np.exp(-Xnf**2 * 2.5) * np.exp(-ft * 5) * 22
+    floor_arr = np.zeros((h - wall_h, w, 4), dtype=np.uint8)
+    floor_arr[:, :, 2] = np.clip(floor_glow, 0, 255).astype(np.uint8)
+    floor_arr[:, :, 3] = np.clip(floor_glow * 0.6, 0, 255).astype(np.uint8)
+    floor_layer = Image.fromarray(floor_arr, 'RGBA')
+    img.alpha_composite(floor_layer, (0, wall_h))
 
     # ── zyAI.ro — LED letters on wall ────────────────────────────────────────
     fs = max(32, int(w * 0.065))
@@ -585,7 +588,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "023bottom"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "024nogrid"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
