@@ -278,7 +278,7 @@ def make_showroom(w: int, h: int, wall_frac: float = 0.56) -> Image.Image:
         draw.line([(side_x, int(wall_h*0.05)), (side_x, wall_h)],
                   fill=(70, 50, 240, 85), width=2)
 
-    # ── Floor: gradient only, no perspective grid (grid caused floating illusion)
+    # ── Floor: gradient + perspective grid ───────────────────────────────────
     Y_floor, X_floor = np.mgrid[wall_h:h, 0:w].astype(np.float32)
     ft = np.clip((Y_floor - wall_h) / max(h - wall_h, 1), 0, 1)
     Xnf = (X_floor - w / 2) / (w / 2)
@@ -288,6 +288,15 @@ def make_showroom(w: int, h: int, wall_frac: float = 0.56) -> Image.Image:
     floor_arr[:, :, 3] = np.clip(floor_glow * 0.6, 0, 255).astype(np.uint8)
     floor_layer = Image.fromarray(floor_arr, 'RGBA')
     img.alpha_composite(floor_layer, (0, wall_h))
+
+    # Perspective floor grid
+    draw2 = ImageDraw.Draw(img)
+    vp = w // 2
+    for i in range(1, 9):
+        fy = wall_h + int((h - wall_h) * (i / 8)**0.52)
+        draw2.line([(0, fy), (w, fy)], fill=(45, 75, 200, max(5, 44 - i*5)))
+    for xp in range(-130, 131, 16):
+        draw2.line([(vp, wall_h), (vp + int(w*xp/100), h)], fill=(38, 62, 185, 18))
 
     # ── zyAI.ro — LED letters on wall ────────────────────────────────────────
     fs = max(32, int(w * 0.065))
@@ -492,27 +501,28 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     bg = make_showroom(sw, canvas_h, wall_frac=wall_frac)
     draw = ImageDraw.Draw(bg)
 
-    # ── Contact shadow at wall_h ──────────────────────────────────────────────
+    # ── Contact shadow at target_bottom (where car wheels actually touch floor) ─
     scx = sw // 2
+    py = target_bottom  # car bottom is here, not at wall_h
     shadow_layer = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shadow_layer)
     for i in range(18, 0, -1):
         srw = int(sw * 0.78 * i / 18)
         srh = max(4, int(srw * 0.12 * i / 18))
         sa  = int(140 * (i / 18) ** 1.5)
-        sd.ellipse([(scx - srw//2, wall_h - srh//2),
-                    (scx + srw//2, wall_h + srh//2)], fill=(2, 5, 25, sa))
+        sd.ellipse([(scx - srw//2, py - srh//2),
+                    (scx + srw//2, py + srh//2)], fill=(2, 5, 25, sa))
     bg.alpha_composite(shadow_layer.filter(ImageFilter.GaussianBlur(radius=18)))
     core = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
     cd = ImageDraw.Draw(core)
-    cd.ellipse([(scx - int(sw*0.55)//2, wall_h - max(4,int(sw*0.025))//2),
-                (scx + int(sw*0.55)//2, wall_h + max(4,int(sw*0.025))//2)],
+    cd.ellipse([(scx - int(sw*0.55)//2, py - max(4,int(sw*0.025))//2),
+                (scx + int(sw*0.55)//2, py + max(4,int(sw*0.025))//2)],
                fill=(0, 0, 0, 180))
     bg.alpha_composite(core.filter(ImageFilter.GaussianBlur(radius=6)))
     gw, gh = int(sw * 0.60), max(3, int(sw * 0.018))
     glow = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
-    gd.ellipse([(scx - gw//2, wall_h - gh//2), (scx + gw//2, wall_h + gh//2)],
+    gd.ellipse([(scx - gw//2, py - gh//2), (scx + gw//2, py + gh//2)],
                fill=(40, 90, 255, 90))
     bg.alpha_composite(glow.filter(ImageFilter.GaussianBlur(radius=8)))
 
@@ -588,7 +598,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "024nogrid"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "025shadowfix"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
