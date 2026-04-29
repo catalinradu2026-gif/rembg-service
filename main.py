@@ -452,20 +452,22 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
 
     import math
 
-    # Crop transparent padding (1% width threshold — catches even thin tire contact)
+    # Detect real car body (skip fringes/artifacts): use rows with opaque count
+    # >= 20% of the row with maximum opaque pixels. Fringes are thin (a few %
+    # of width), the car spans much more, so this filters them out reliably.
     alpha_arr = np.array(subject.getchannel('A'))
-    min_solid = max(1, int(sw * 0.01))
-
-    crop_bottom = sh
-    for y in range(sh - 1, -1, -1):
-        if int(np.sum(alpha_arr[y, :] > 30)) >= min_solid:
-            crop_bottom = y + 1
-            break
-    crop_top = 0
-    for y in range(sh):
-        if int(np.sum(alpha_arr[y, :] > 30)) >= min_solid:
-            crop_top = y
-            break
+    opaque_counts = np.sum(alpha_arr > 100, axis=1).astype(np.int32)
+    max_opaque = int(opaque_counts.max()) if opaque_counts.size else 0
+    if max_opaque > 0:
+        thr = max(int(sw * 0.05), int(max_opaque * 0.20))
+        idxs = np.where(opaque_counts >= thr)[0]
+        if idxs.size:
+            crop_top = int(idxs[0])
+            crop_bottom = int(idxs[-1]) + 1
+        else:
+            crop_top, crop_bottom = 0, sh
+    else:
+        crop_top, crop_bottom = 0, sh
     if crop_bottom <= crop_top:
         crop_top, crop_bottom = 0, sh
 
@@ -501,9 +503,23 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     bg = make_showroom(sw, canvas_h, wall_frac=wall_frac)
     draw = ImageDraw.Draw(bg)
 
-    # ── Contact shadow at target_bottom (where car wheels actually touch floor) ─
+    # ── Platform disc at target_bottom ───────────────────────────────────────
     scx = sw // 2
     py = target_bottom  # car bottom is here, not at wall_h
+    plat_w = int(sw * 0.68)
+    plat_h = int(plat_w * 0.14)
+    for ring in range(4, 0, -1):
+        rw, rh = plat_w + ring*10, plat_h + ring*3
+        draw.ellipse([(scx-rw//2, py-rh//2), (scx+rw//2, py+rh//2)],
+                     fill=(40, 65, 200, 16*ring))
+    draw.ellipse([(scx-plat_w//2, py-plat_h//2),
+                  (scx+plat_w//2, py+plat_h//2)],
+                 fill=(18, 22, 38, 235))
+    draw.arc([(scx-plat_w//2, py-plat_h//2),
+              (scx+plat_w//2, py+plat_h//2)],
+             start=185, end=355, fill=(80, 125, 255, 170), width=2)
+
+    # ── Contact shadow at target_bottom (where car wheels actually touch floor) ─
     shadow_layer = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shadow_layer)
     for i in range(18, 0, -1):
@@ -598,7 +614,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "025shadowfix"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "026wheeldetect"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
