@@ -495,11 +495,10 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     car_strip = subject.crop((0, crop_top, sw, crop_bottom))
     car_h = crop_bottom - crop_top
 
-    # ── Wide canvas: 30% wider than car gives breathing room (car appears lower) ─
-    # Same wall_frac=0.78 + embed=6 as the working version, only canvas dims change.
-    canvas_w = int(sw * 1.30)                # 30% wider than car
-    canvas_h = int(canvas_w * 1.05)          # keep same 1.05 portrait ratio
-    wall_h   = int(canvas_h * 0.78)
+    # Canvas: 15% wider than car (car stays large, not tiny), taller with low horizon
+    canvas_w = int(sw * 1.15)                # only 15% wider — car stays prominent
+    canvas_h = int(canvas_w * 1.30)          # tall canvas
+    wall_h   = int(canvas_h * 0.62)          # horizon at 62% — car appears lower in frame
     wall_frac = wall_h / canvas_h
 
     embed     = 6
@@ -643,7 +642,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "029widecanvas"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "030lower"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
