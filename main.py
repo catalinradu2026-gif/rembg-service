@@ -463,10 +463,12 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
 
     car_h = crop_bottom - crop_top
 
-    # Canvas = car height (no top/bottom padding) + floor strip
+    # Sink car slightly into the floor so it always appears grounded,
+    # regardless of detection precision or photo angle.
+    car_sink    = int(car_h * 0.06)   # 6% of car height
     floor_extra = int(sw * 0.18)
-    canvas_h    = car_h + floor_extra
-    wall_h      = car_h   # floor line = exact bottom of car pixels
+    canvas_h    = car_h + car_sink + floor_extra
+    wall_h      = car_h   # floor line at original car_h; car wheels end at car_h+car_sink
     wall_frac   = wall_h / canvas_h
     print(f"[composite] sw={sw} sh={sh} crop=({crop_top},{crop_bottom}) car_h={car_h} canvas_h={canvas_h} wf={wall_frac:.3f}")
 
@@ -512,9 +514,9 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         refl_canvas.paste(refl.filter(ImageFilter.GaussianBlur(radius=3)), (0, wall_h))
         bg.alpha_composite(refl_canvas)
 
-    # ── Car: vertically cropped to solid pixels only, no floating padding ─────
+    # ── Car: cropped + shifted down so wheels are embedded in floor ──────────
     car_strip = subject.crop((0, crop_top, sw, crop_bottom))
-    bg.paste(car_strip, (0, 0), car_strip)
+    bg.paste(car_strip, (0, car_sink), car_strip)
 
     result = add_watermark(bg)
     out = io.BytesIO()
@@ -571,7 +573,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "021shadow"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "022sink"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
