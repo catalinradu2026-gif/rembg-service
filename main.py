@@ -440,16 +440,28 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
 
     import math
 
-    # Detect car bounding box — threshold 80 captures solid pixels, ignores
-    # anti-aliasing/shadow fringe that would make the car appear to float
-    alpha_ch = subject.getchannel('A')
-    bbox = alpha_ch.point(lambda p: 255 if p > 80 else 0).getbbox()
-    if not bbox:
-        bbox = (0, 0, sw, sh)
+    # Find actual car bottom/top: first row (from edges) where ≥5% of width
+    # has solid alpha. This skips fringe/corner pixels that would make the car
+    # appear to float above the platform.
+    alpha_arr = np.array(subject.getchannel('A'))
+    min_solid = max(1, int(sw * 0.05))  # 5% of width
 
-    crop_top    = bbox[1]
-    crop_bottom = bbox[3]
-    car_h       = crop_bottom - crop_top
+    crop_bottom = sh
+    for y in range(sh - 1, -1, -1):
+        if int(np.sum(alpha_arr[y, :] > 80)) >= min_solid:
+            crop_bottom = y + 1
+            break
+
+    crop_top = 0
+    for y in range(sh):
+        if int(np.sum(alpha_arr[y, :] > 80)) >= min_solid:
+            crop_top = y
+            break
+
+    if crop_bottom <= crop_top:
+        crop_top, crop_bottom = 0, sh
+
+    car_h = crop_bottom - crop_top
 
     # Canvas = car height (no top/bottom padding) + floor strip
     floor_extra = int(sw * 0.18)
@@ -563,7 +575,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "019crop1"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "020rowscan"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
