@@ -452,24 +452,36 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
 
     import math
 
-    # Detect real car body (skip fringes/artifacts): use rows with opaque count
-    # >= 20% of the row with maximum opaque pixels. Fringes are thin (a few %
-    # of width), the car spans much more, so this filters them out reliably.
+    # Detect real car body — robust against PhotoRoom fringes:
+    # 1) alpha > 180 = confidently solid (excludes feathered halo)
+    # 2) keep only the LARGEST connected component (kills speckles below tires)
+    # 3) smooth row counts (tolerates 1-2px alpha gaps)
+    # 4) absolute 4%-of-width threshold (works for both 3/4 and top-down shots)
+    # 5) write cleaned alpha back so fringes don't render at paste time
     alpha_arr = np.array(subject.getchannel('A'))
-    opaque_counts = np.sum(alpha_arr > 100, axis=1).astype(np.int32)
-    max_opaque = int(opaque_counts.max()) if opaque_counts.size else 0
-    if max_opaque > 0:
-        thr = max(int(sw * 0.05), int(max_opaque * 0.20))
-        idxs = np.where(opaque_counts >= thr)[0]
-        if idxs.size:
-            crop_top = int(idxs[0])
-            crop_bottom = int(idxs[-1]) + 1
-        else:
-            crop_top, crop_bottom = 0, sh
+    solid = (alpha_arr > 180).astype(np.uint8) * 255
+    n_cc, labels_cc, stats_cc, _ = cv2.connectedComponentsWithStats(solid, 8)
+    if n_cc > 1:
+        largest = 1 + int(np.argmax(stats_cc[1:, cv2.CC_STAT_AREA]))
+        solid = np.where(labels_cc == largest, 255, 0).astype(np.uint8)
+
+    opaque_counts = np.sum(solid > 0, axis=1).astype(np.int32)
+    if opaque_counts.size >= 5:
+        opaque_counts = np.convolve(opaque_counts, np.ones(5, dtype=np.int32), mode='same') // 5
+
+    abs_thr = max(20, int(sw * 0.04))
+    idxs = np.where(opaque_counts >= abs_thr)[0]
+    if idxs.size:
+        crop_top = int(idxs[0])
+        crop_bottom = int(idxs[-1]) + 1
     else:
         crop_top, crop_bottom = 0, sh
     if crop_bottom <= crop_top:
         crop_top, crop_bottom = 0, sh
+
+    # Clean alpha so the paste doesn't carry fringe pixels into the showroom
+    clean_alpha = np.where(solid > 0, alpha_arr, 0).astype(np.uint8)
+    subject.putalpha(Image.fromarray(clean_alpha))
 
     car_strip = subject.crop((0, crop_top, sw, crop_bottom))
     car_h = crop_bottom - crop_top
@@ -481,7 +493,7 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     wall_h   = int(canvas_h * 0.78)
     wall_frac = wall_h / canvas_h
 
-    embed     = max(4, int(car_h * 0.05))   # embed 5% of car into floor
+    embed     = 6                            # tiny constant embed: wheels just touch floor
     target_bottom = wall_h + embed           # car bottom sits here (in floor)
     target_top    = target_bottom - car_h    # where car top goes in canvas
 
@@ -614,7 +626,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "026wheeldetect"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "027cleanmask"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
