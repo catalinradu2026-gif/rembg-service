@@ -495,38 +495,38 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     car_strip = subject.crop((0, crop_top, sw, crop_bottom))
     car_h = crop_bottom - crop_top
 
-    # ── Fixed canvas: floor at exactly 78% of height ──────────────────────────
-    # Car is BOTTOM-ALIGNED to wall_h + embed 5% into floor.
-    # This is mathematically guaranteed — car cannot float.
-    canvas_h = int(sw * 1.05)
+    # ── Wide canvas: 30% wider than car gives breathing room (car appears lower) ─
+    # Same wall_frac=0.78 + embed=6 as the working version, only canvas dims change.
+    canvas_w = int(sw * 1.30)                # 30% wider than car
+    canvas_h = int(canvas_w * 1.05)          # keep same 1.05 portrait ratio
     wall_h   = int(canvas_h * 0.78)
     wall_frac = wall_h / canvas_h
 
-    embed     = 6                            # tiny constant embed: wheels just touch floor
-    target_bottom = wall_h + embed           # car bottom sits here (in floor)
-    target_top    = target_bottom - car_h    # where car top goes in canvas
+    embed     = 6
+    target_bottom = wall_h + embed
+    target_top    = target_bottom - car_h
 
-    paste_x, paste_y = 0, 0
+    paste_x = (canvas_w - sw) // 2           # center car horizontally
+    paste_y = 0
     if target_top >= 0:
-        # Car fits above floor — bottom-align with embed
         paste_y = target_top
     else:
-        # Car too tall: scale down so it fits, still bottom-aligned
+        # Car too tall: scale down, still centered + bottom-aligned
         scale     = target_bottom / car_h
         new_w     = int(sw * scale)
         car_strip = car_strip.resize((new_w, target_bottom), Image.LANCZOS)
-        paste_x   = (sw - new_w) // 2
+        paste_x   = (canvas_w - new_w) // 2
         paste_y   = 0
         car_h     = target_bottom
 
-    print(f"[composite] sw={sw} sh={sh} car_h={car_h} canvas={canvas_h} wall={wall_h} paste=({paste_x},{paste_y})")
+    print(f"[composite] sw={sw} sh={sh} car_h={car_h} canvas={canvas_w}x{canvas_h} wall={wall_h} paste=({paste_x},{paste_y})")
 
-    bg = make_showroom(sw, canvas_h, wall_frac=wall_frac)
+    bg = make_showroom(canvas_w, canvas_h, wall_frac=wall_frac)
     draw = ImageDraw.Draw(bg)
 
-    # ── Platform disc at target_bottom ───────────────────────────────────────
-    scx = sw // 2
-    py = target_bottom  # car bottom is here, not at wall_h
+    # ── Turntable platform disc at target_bottom (with tick marks) ──────────
+    scx = canvas_w // 2
+    py = target_bottom
     plat_w = int(sw * 0.68)
     plat_h = int(plat_w * 0.14)
     for ring in range(4, 0, -1):
@@ -539,9 +539,17 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     draw.arc([(scx-plat_w//2, py-plat_h//2),
               (scx+plat_w//2, py+plat_h//2)],
              start=185, end=355, fill=(80, 125, 255, 170), width=2)
+    # Radial tick marks around the disc edge — turntable detail
+    for deg in range(0, 360, 24):
+        rad = math.radians(deg)
+        ix = scx + int((plat_w//2 - 5) * math.cos(rad))
+        iy = py  + int((plat_h//2 - 2) * math.sin(rad))
+        ox = scx + int((plat_w//2 + 1) * math.cos(rad))
+        oy = py  + int((plat_h//2 + 1) * math.sin(rad))
+        draw.line([(ix, iy), (ox, oy)], fill=(60, 100, 210, 100), width=1)
 
-    # ── Contact shadow at target_bottom (where car wheels actually touch floor) ─
-    shadow_layer = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
+    # ── Contact shadow at target_bottom ─────────────────────────────────────
+    shadow_layer = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shadow_layer)
     for i in range(18, 0, -1):
         srw = int(sw * 0.78 * i / 18)
@@ -550,34 +558,34 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         sd.ellipse([(scx - srw//2, py - srh//2),
                     (scx + srw//2, py + srh//2)], fill=(2, 5, 25, sa))
     bg.alpha_composite(shadow_layer.filter(ImageFilter.GaussianBlur(radius=18)))
-    core = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
+    core = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
     cd = ImageDraw.Draw(core)
     cd.ellipse([(scx - int(sw*0.55)//2, py - max(4,int(sw*0.025))//2),
                 (scx + int(sw*0.55)//2, py + max(4,int(sw*0.025))//2)],
                fill=(0, 0, 0, 180))
     bg.alpha_composite(core.filter(ImageFilter.GaussianBlur(radius=6)))
     gw, gh = int(sw * 0.60), max(3, int(sw * 0.018))
-    glow = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
+    glow = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
     gd.ellipse([(scx - gw//2, py - gh//2), (scx + gw//2, py + gh//2)],
                fill=(40, 90, 255, 90))
     bg.alpha_composite(glow.filter(ImageFilter.GaussianBlur(radius=8)))
 
-    # ── Reflection ────────────────────────────────────────────────────────────
+    # ── Reflection ──────────────────────────────────────────────────────────
     refl_h = min(int(car_h * 0.12), int(canvas_h * 0.10))
     if refl_h > 6:
         src_bottom = min(crop_bottom, subject.size[1])
         src_top    = max(crop_top, src_bottom - refl_h)
         refl = subject.crop((0, src_top, sw, src_bottom)).transpose(Image.FLIP_TOP_BOTTOM)
-        refl = refl.resize((car_strip.size[0] if paste_x else sw, refl_h), Image.LANCZOS)
+        refl = refl.resize((car_strip.size[0], refl_h), Image.LANCZOS)
         fade_arr = np.array([int(35 * (1 - i / refl_h)) for i in range(refl_h)], dtype=np.uint8)
         fade_2d  = np.tile(fade_arr[:, np.newaxis], (1, refl.size[0]))
         refl.putalpha(Image.fromarray(fade_2d, 'L'))
-        refl_canvas = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
-        refl_canvas.paste(refl.filter(ImageFilter.GaussianBlur(radius=2)), (paste_x, wall_h + embed))
+        refl_canvas = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
+        refl_canvas.paste(refl.filter(ImageFilter.GaussianBlur(radius=2)), (paste_x, target_bottom))
         bg.alpha_composite(refl_canvas)
 
-    # ── Car: bottom-aligned, embedded into floor — cannot float ───────────────
+    # ── Car: centered horizontally, bottom-aligned to floor ─────────────────
     bg.paste(car_strip, (paste_x, paste_y), car_strip)
 
     result = add_watermark(bg)
@@ -635,7 +643,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "028halos"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "029widecanvas"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
