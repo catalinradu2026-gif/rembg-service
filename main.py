@@ -440,23 +440,28 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
 
     import math
 
-    # Detect car bounding box via PIL (most reliable method)
+    # Detect car bounding box — threshold 80 captures solid pixels, ignores
+    # anti-aliasing/shadow fringe that would make the car appear to float
     alpha_ch = subject.getchannel('A')
-    bbox = alpha_ch.point(lambda p: 255 if p > 30 else 0).getbbox()
-    actual_top    = bbox[1] if bbox else 0
-    actual_bottom = bbox[3] if bbox else sh
-    car_height    = actual_bottom - actual_top
+    bbox = alpha_ch.point(lambda p: 255 if p > 80 else 0).getbbox()
+    if not bbox:
+        bbox = (0, 0, sw, sh)
 
+    crop_top    = bbox[1]
+    crop_bottom = bbox[3]
+    car_h       = crop_bottom - crop_top
+
+    # Canvas = car height (no top/bottom padding) + floor strip
     floor_extra = int(sw * 0.18)
-    wall_h      = actual_bottom  # platform exactly at car bottom
-    canvas_h    = actual_bottom + floor_extra
+    canvas_h    = car_h + floor_extra
+    wall_h      = car_h   # floor line = exact bottom of car pixels
     wall_frac   = wall_h / canvas_h
-    print(f"[composite] sw={sw} sh={sh} bbox={bbox} wall_h={wall_h} canvas_h={canvas_h}")
+    print(f"[composite] sw={sw} sh={sh} bbox={bbox} car_h={car_h} canvas_h={canvas_h} wf={wall_frac:.3f}")
 
     bg = make_showroom(sw, canvas_h, wall_frac=wall_frac)
     draw = ImageDraw.Draw(bg)
 
-    # ── Large contact shadow — critical for grounding the car ─────────────────
+    # ── Large contact shadow ──────────────────────────────────────────────────
     shadow_layer = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shadow_layer)
     scx = sw // 2
@@ -489,9 +494,9 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         draw.line([(ix, iy), (ox, oy)], fill=(60, 100, 210, 100), width=1)
 
     # ── Reflection ────────────────────────────────────────────────────────────
-    refl_h = min(int(car_height * 0.15), floor_extra - 10)
+    refl_h = min(int(car_h * 0.15), floor_extra - 10)
     if refl_h > 6:
-        refl = subject.crop((0, actual_bottom - refl_h, sw, actual_bottom)).transpose(Image.FLIP_TOP_BOTTOM)
+        refl = subject.crop((0, crop_bottom - refl_h, sw, crop_bottom)).transpose(Image.FLIP_TOP_BOTTOM)
         refl_canvas = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
         fade_arr = np.array([int(40 * (1 - i / refl_h)) for i in range(refl_h)], dtype=np.uint8)
         fade_2d = np.tile(fade_arr[:, np.newaxis], (1, sw))
@@ -499,8 +504,9 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         refl_canvas.paste(refl.filter(ImageFilter.GaussianBlur(radius=3)), (0, wall_h))
         bg.alpha_composite(refl_canvas)
 
-    # ── Car at (0,0), bottom of car = actual_bottom = wall_h ─────────────────
-    bg.paste(subject, (0, 0), subject)
+    # ── Car: vertically cropped to solid pixels only, no floating padding ─────
+    car_strip = subject.crop((0, crop_top, sw, crop_bottom))
+    bg.paste(car_strip, (0, 0), car_strip)
 
     result = add_watermark(bg)
     out = io.BytesIO()
@@ -557,7 +563,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "018465a"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "019crop1"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
