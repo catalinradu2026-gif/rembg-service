@@ -468,7 +468,7 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     canvas_h    = car_h + floor_extra
     wall_h      = car_h   # floor line = exact bottom of car pixels
     wall_frac   = wall_h / canvas_h
-    print(f"[composite] sw={sw} sh={sh} bbox={bbox} car_h={car_h} canvas_h={canvas_h} wf={wall_frac:.3f}")
+    print(f"[composite] sw={sw} sh={sh} crop=({crop_top},{crop_bottom}) car_h={car_h} canvas_h={canvas_h} wf={wall_frac:.3f}")
 
     bg = make_showroom(sw, canvas_h, wall_frac=wall_frac)
     draw = ImageDraw.Draw(bg)
