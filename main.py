@@ -473,37 +473,33 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     bg = make_showroom(sw, canvas_h, wall_frac=wall_frac)
     draw = ImageDraw.Draw(bg)
 
-    # ── Large contact shadow ──────────────────────────────────────────────────
+    # ── Contact shadow — large soft ellipse anchors the car to the floor ────
+    scx = sw // 2
     shadow_layer = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shadow_layer)
-    scx = sw // 2
-    for i in range(12, 0, -1):
-        srw = int(sw * 0.82 * i / 12)
-        srh = max(6, int(srw * 0.09 * i / 12))
-        sa  = int(110 * (i / 12) ** 1.3)
+    # Outer soft shadow
+    for i in range(18, 0, -1):
+        srw = int(sw * 0.78 * i / 18)
+        srh = max(4, int(srw * 0.12 * i / 18))
+        sa  = int(140 * (i / 18) ** 1.5)
         sd.ellipse([(scx - srw//2, wall_h - srh//2),
-                    (scx + srw//2, wall_h + srh//2)], fill=(3, 8, 35, sa))
-    bg.alpha_composite(shadow_layer.filter(ImageFilter.GaussianBlur(radius=14)))
-
-    # ── Turntable platform at floor line ─────────────────────────────────────
-    cx, py = sw // 2, wall_h
-    plat_w = int(sw * 0.68)
-    plat_h = int(plat_w * 0.14)
-    for ring in range(4, 0, -1):
-        rw, rh = plat_w + ring*10, plat_h + ring*3
-        draw.ellipse([(cx-rw//2, py-rh//2), (cx+rw//2, py+rh//2)],
-                     fill=(40, 65, 200, 16*ring))
-    draw.ellipse([(cx-plat_w//2, py-plat_h//2), (cx+plat_w//2, py+plat_h//2)],
-                 fill=(18, 22, 38, 235))
-    draw.arc([(cx-plat_w//2, py-plat_h//2), (cx+plat_w//2, py+plat_h//2)],
-             start=185, end=355, fill=(80, 125, 255, 170), width=2)
-    for deg in range(0, 360, 24):
-        rad = math.radians(deg)
-        ix = cx + int((plat_w//2 - 5) * math.cos(rad))
-        iy = py + int((plat_h//2 - 2) * math.sin(rad))
-        ox = cx + int((plat_w//2 + 1) * math.cos(rad))
-        oy = py + int((plat_h//2 + 1) * math.sin(rad))
-        draw.line([(ix, iy), (ox, oy)], fill=(60, 100, 210, 100), width=1)
+                    (scx + srw//2, wall_h + srh//2)], fill=(2, 5, 25, sa))
+    bg.alpha_composite(shadow_layer.filter(ImageFilter.GaussianBlur(radius=18)))
+    # Tight dark core directly under the car
+    core = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
+    cd = ImageDraw.Draw(core)
+    cw, ch = int(sw * 0.55), max(4, int(sw * 0.025))
+    cd.ellipse([(scx - cw//2, wall_h - ch//2), (scx + cw//2, wall_h + ch//2)],
+               fill=(0, 0, 0, 180))
+    bg.alpha_composite(core.filter(ImageFilter.GaussianBlur(radius=6)))
+    # Neon blue glow line at floor level (subtle, replaces visible platform disc)
+    cx = sw // 2
+    gw, gh = int(sw * 0.60), max(3, int(sw * 0.018))
+    glow = Image.new('RGBA', (sw, canvas_h), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse([(cx - gw//2, wall_h - gh//2), (cx + gw//2, wall_h + gh//2)],
+               fill=(40, 90, 255, 90))
+    bg.alpha_composite(glow.filter(ImageFilter.GaussianBlur(radius=8)))
 
     # ── Reflection ────────────────────────────────────────────────────────────
     refl_h = min(int(car_h * 0.15), floor_extra - 10)
@@ -575,7 +571,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "020rowscan"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "021shadow"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
