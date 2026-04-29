@@ -267,6 +267,15 @@ def make_showroom(w: int, h: int, wall_frac: float = 0.56) -> Image.Image:
     img = small.resize((w, h), Image.BILINEAR).convert('RGBA')
     draw = ImageDraw.Draw(img)
 
+    # ── Spotlight halos (ceiling fixtures) ───────────────────────────────────
+    halo_xs  = [int(w * 0.50), int(w * 0.15), int(w * 0.85)]
+    halo_col = [(200, 220, 255), (130, 100, 240), (130, 100, 240)]
+    for hx, hc in zip(halo_xs, halo_col):
+        r = max(10, int(w * 0.020))
+        for ring in range(5, 0, -1):
+            rr = r * ring
+            draw.ellipse([(hx-rr, -rr//2), (hx+rr, rr//2)], fill=(*hc, max(4, 26//ring)))
+        draw.ellipse([(hx-r//2, 0), (hx+r//2, r)], fill=(*hc, 225))
 
     # ── Neon blue horizon line ────────────────────────────────────────────────
     for dy in range(-4, 5):
@@ -626,7 +635,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "027cleanmask"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "028halos"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
