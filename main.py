@@ -1,5 +1,6 @@
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
+import math
 import os
 import urllib.request
 import urllib.parse
@@ -402,6 +403,48 @@ def make_studio(w: int, h: int) -> Image.Image:
     return Image.fromarray(pix, 'RGB')
 
 
+def level_car(subject: Image.Image) -> Image.Image:
+    """Detect car tilt from alpha bottom-edge and rotate to level it."""
+    alpha_arr = np.array(subject.getchannel('A'))
+    h, w = alpha_arr.shape
+
+    # For each column find the lowest opaque pixel
+    bottom_y = np.full(w, -1, dtype=np.int32)
+    for x in range(w):
+        opaque = np.where(alpha_arr[:, x] > 80)[0]
+        if len(opaque):
+            bottom_y[x] = int(opaque[-1])
+
+    valid = bottom_y > h * 0.3  # ignore very high stray pixels
+    if valid.sum() < w * 0.25:
+        return subject
+
+    xs = np.where(valid)[0]
+
+    # Compare left quarter vs right quarter average bottom-y
+    quarter = max(10, w // 5)
+    left_xs  = xs[xs < quarter]
+    right_xs = xs[xs > w - quarter]
+    if len(left_xs) < 4 or len(right_xs) < 4:
+        return subject
+
+    left_y  = float(bottom_y[left_xs].mean())
+    right_y = float(bottom_y[right_xs].mean())
+    left_x  = float(left_xs.mean())
+    right_x = float(right_xs.mean())
+
+    dy = right_y - left_y
+    dx = right_x - left_x
+    angle_deg = math.degrees(math.atan2(dy, dx))
+
+    # Only correct 1.5°–14° tilts; ignore tiny wobbles and extreme angles
+    if abs(angle_deg) < 1.5 or abs(angle_deg) > 14.0:
+        return subject
+
+    print(f"[level_car] tilt {angle_deg:.1f}° → correcting")
+    return subject.rotate(-angle_deg, expand=False, resample=Image.BICUBIC)
+
+
 def add_watermark(img: Image.Image) -> Image.Image:
     from PIL import ImageDraw, ImageFont
     draw = ImageDraw.Draw(img)
@@ -450,6 +493,10 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         s = 1100 / max(sw, sh)
         sw, sh = int(sw * s), int(sh * s)
         subject = subject.resize((sw, sh), Image.LANCZOS)
+
+    # Detectăm și corectăm înclinarea (poze făcute de sus/jos)
+    subject = level_car(subject)
+    sw, sh = subject.size
 
     wall_h = int(sh * 0.58)
     bg = make_showroom(sw, sh)
@@ -546,7 +593,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "038"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "039"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
