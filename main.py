@@ -181,26 +181,8 @@ def remove_bg_photoroom(image_data: bytes) -> bytes:
     return r.content
 
 
-def remove_bg_from_bytes(image_data: bytes) -> bytes:
-    # Try PhotoRoom first (ML quality, 150/month)
-    try:
-        return remove_bg_photoroom(image_data)
-    except Exception as e:
-        print(f"PhotoRoom failed ({e}), trying remove.bg...")
-
-    # Try remove.bg (50/month)
-    try:
-        return remove_bg_removebg(image_data)
-    except Exception as e:
-        print(f"remove.bg failed ({e}), trying HF...")
-
-    # Try HF RMBG
-    try:
-        return remove_bg_hf(image_data)
-    except Exception as e:
-        print(f"HF RMBG failed ({e}), falling back to GrabCut")
-
-    # Fallback: GrabCut
+def _grabcut_remove_bg(image_data: bytes) -> bytes:
+    """Local GrabCut fallback — free, no API credits."""
     nparr = np.frombuffer(image_data, np.uint8)
     orig = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if orig is None:
@@ -217,6 +199,30 @@ def remove_bg_from_bytes(image_data: bytes) -> bytes:
     b, g, r = cv2.split(orig)
     _, buf = cv2.imencode('.png', cv2.merge([b, g, r, alpha]))
     return buf.tobytes()
+
+
+def remove_bg_from_bytes(image_data: bytes, use_cheap: bool = False) -> bytes:
+    """Remove background. use_cheap=True skips paid APIs (for non-auto categories)."""
+    if not use_cheap:
+        # Try PhotoRoom first (ML quality, 150/month)
+        try:
+            return remove_bg_photoroom(image_data)
+        except Exception as e:
+            print(f"PhotoRoom failed ({e}), trying remove.bg...")
+
+        # Try remove.bg (50/month)
+        try:
+            return remove_bg_removebg(image_data)
+        except Exception as e:
+            print(f"remove.bg failed ({e}), trying HF...")
+
+    # Try HF RMBG (free tier)
+    try:
+        return remove_bg_hf(image_data)
+    except Exception as e:
+        print(f"HF RMBG failed ({e}), falling back to GrabCut")
+
+    return _grabcut_remove_bg(image_data)
 
 
 # ── Background compositing ────────────────────────────────────────────────────
@@ -428,17 +434,17 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     is_auto = any(a in cat_lower for a in AUTO_CATS)
 
     if not is_auto:
-        # Non-auto: simple studio, keep original size
+        # Non-auto: clean white studio, compact output
         sw, sh = subject.size
-        if max(sw, sh) > 1100:
-            s = 1100 / max(sw, sh)
+        if max(sw, sh) > 900:
+            s = 900 / max(sw, sh)
             sw, sh = int(sw * s), int(sh * s)
             subject = subject.resize((sw, sh), Image.LANCZOS)
         bg = make_studio(sw, sh).convert('RGBA')
         bg.paste(subject, (0, 0), subject)
         result = add_watermark(bg)
         out = io.BytesIO()
-        result.convert('RGB').save(out, format='WEBP', quality=85)
+        result.convert('RGB').save(out, format='WEBP', quality=75)
         return out.getvalue()
 
     # ── Auto showroom ─────────────────────────────────────────────────────────
@@ -543,7 +549,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "034"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "035"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
@@ -604,9 +610,9 @@ class Handler(BaseHTTPRequestHandler):
             self._error(400, str(e))
             return
 
-        if self.path == "/remove-bg":
+        if self.path == '/remove-bg':
             self._handle_remove_bg(data)
-        elif self.path == "/process":
+        elif self.path == '/process':
             self._handle_process(data)
         else:
             self._error(404, "not found")
@@ -633,9 +639,12 @@ class Handler(BaseHTTPRequestHandler):
             if not image_url:
                 self._error(400, "image_url required")
                 return
+            cat_lower = (category or '').lower()
+            AUTO_CATS = ('auto', 'masina', 'masini', 'vehicule', 'cars', 'camioane', 'motociclete', 'scutere', 'autoutilitare')
+            is_auto = any(a in cat_lower for a in AUTO_CATS)
             with urllib.request.urlopen(image_url, timeout=20) as r:
                 input_data = r.read()
-            no_bg = remove_bg_from_bytes(input_data)
+            no_bg = remove_bg_from_bytes(input_data, use_cheap=not is_auto)
             final_webp = composite_image(no_bg, category)
             final_url = upload_to_supabase(final_webp, 'image/webp')
             self._json(200, {"ok": True, "url": final_url})
