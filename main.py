@@ -492,40 +492,21 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     clean_alpha = np.where(solid > 0, alpha_arr, 0).astype(np.uint8)
     subject.putalpha(Image.fromarray(clean_alpha))
 
-    car_strip = subject.crop((0, crop_top, sw, crop_bottom))
-    car_h = crop_bottom - crop_top
-
-    # Canvas: 15% wider than car (car stays large, not tiny), taller with low horizon
-    canvas_w = int(sw * 1.15)                # only 15% wider — car stays prominent
-    canvas_h = int(canvas_w * 1.30)          # tall canvas
-    wall_h   = int(canvas_h * 0.62)          # horizon at 62% — car appears lower in frame
+    # Canvas = original image size (car fills frame naturally, as in best version)
+    # wall_h = detected car bottom → disc sits exactly under wheels
+    canvas_w = sw
+    canvas_h = sh
+    wall_h   = crop_bottom          # disc at actual detected car bottom
     wall_frac = wall_h / canvas_h
 
-    embed     = 6
-    target_bottom = wall_h + embed
-    target_top    = target_bottom - car_h
-
-    paste_x = (canvas_w - sw) // 2           # center car horizontally
-    paste_y = 0
-    if target_top >= 0:
-        paste_y = target_top
-    else:
-        # Car too tall: scale down, still centered + bottom-aligned
-        scale     = target_bottom / car_h
-        new_w     = int(sw * scale)
-        car_strip = car_strip.resize((new_w, target_bottom), Image.LANCZOS)
-        paste_x   = (canvas_w - new_w) // 2
-        paste_y   = 0
-        car_h     = target_bottom
-
-    print(f"[composite] sw={sw} sh={sh} car_h={car_h} canvas={canvas_w}x{canvas_h} wall={wall_h} paste=({paste_x},{paste_y})")
+    print(f"[composite] sw={sw} sh={sh} crop=({crop_top},{crop_bottom}) wall={wall_h}")
 
     bg = make_showroom(canvas_w, canvas_h, wall_frac=wall_frac)
     draw = ImageDraw.Draw(bg)
 
-    # ── Turntable platform disc at target_bottom (with tick marks) ──────────
-    scx = canvas_w // 2
-    py = target_bottom
+    # ── Turntable platform disc at wall_h (where wheels touch) ──────────────
+    scx = sw // 2
+    py  = wall_h
     plat_w = int(sw * 0.68)
     plat_h = int(plat_w * 0.14)
     for ring in range(4, 0, -1):
@@ -538,7 +519,6 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     draw.arc([(scx-plat_w//2, py-plat_h//2),
               (scx+plat_w//2, py+plat_h//2)],
              start=185, end=355, fill=(80, 125, 255, 170), width=2)
-    # Radial tick marks around the disc edge — turntable detail
     for deg in range(0, 360, 24):
         rad = math.radians(deg)
         ix = scx + int((plat_w//2 - 5) * math.cos(rad))
@@ -547,8 +527,8 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         oy = py  + int((plat_h//2 + 1) * math.sin(rad))
         draw.line([(ix, iy), (ox, oy)], fill=(60, 100, 210, 100), width=1)
 
-    # ── Contact shadow at target_bottom ─────────────────────────────────────
-    shadow_layer = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
+    # ── Contact shadow at wall_h ─────────────────────────────────────────────
+    shadow_layer = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shadow_layer)
     for i in range(18, 0, -1):
         srw = int(sw * 0.78 * i / 18)
@@ -557,35 +537,35 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         sd.ellipse([(scx - srw//2, py - srh//2),
                     (scx + srw//2, py + srh//2)], fill=(2, 5, 25, sa))
     bg.alpha_composite(shadow_layer.filter(ImageFilter.GaussianBlur(radius=18)))
-    core = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
+    core = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
     cd = ImageDraw.Draw(core)
     cd.ellipse([(scx - int(sw*0.55)//2, py - max(4,int(sw*0.025))//2),
                 (scx + int(sw*0.55)//2, py + max(4,int(sw*0.025))//2)],
                fill=(0, 0, 0, 180))
     bg.alpha_composite(core.filter(ImageFilter.GaussianBlur(radius=6)))
     gw, gh = int(sw * 0.60), max(3, int(sw * 0.018))
-    glow = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
+    glow = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
     gd.ellipse([(scx - gw//2, py - gh//2), (scx + gw//2, py + gh//2)],
                fill=(40, 90, 255, 90))
     bg.alpha_composite(glow.filter(ImageFilter.GaussianBlur(radius=8)))
 
     # ── Reflection ──────────────────────────────────────────────────────────
-    refl_h = min(int(car_h * 0.12), int(canvas_h * 0.10))
+    floor_h = sh - wall_h
+    refl_h  = min(int((crop_bottom - crop_top) * 0.12), max(0, floor_h - 4))
     if refl_h > 6:
-        src_bottom = min(crop_bottom, subject.size[1])
-        src_top    = max(crop_top, src_bottom - refl_h)
-        refl = subject.crop((0, src_top, sw, src_bottom)).transpose(Image.FLIP_TOP_BOTTOM)
-        refl = refl.resize((car_strip.size[0], refl_h), Image.LANCZOS)
+        src_top = max(crop_top, crop_bottom - refl_h)
+        refl = subject.crop((0, src_top, sw, crop_bottom)).transpose(Image.FLIP_TOP_BOTTOM)
+        refl = refl.resize((sw, refl_h), Image.LANCZOS)
         fade_arr = np.array([int(35 * (1 - i / refl_h)) for i in range(refl_h)], dtype=np.uint8)
-        fade_2d  = np.tile(fade_arr[:, np.newaxis], (1, refl.size[0]))
+        fade_2d  = np.tile(fade_arr[:, np.newaxis], (1, sw))
         refl.putalpha(Image.fromarray(fade_2d, 'L'))
-        refl_canvas = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
-        refl_canvas.paste(refl.filter(ImageFilter.GaussianBlur(radius=2)), (paste_x, target_bottom))
+        refl_canvas = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
+        refl_canvas.paste(refl.filter(ImageFilter.GaussianBlur(radius=2)), (0, wall_h))
         bg.alpha_composite(refl_canvas)
 
-    # ── Car: centered horizontally, bottom-aligned to floor ─────────────────
-    bg.paste(car_strip, (paste_x, paste_y), car_strip)
+    # ── Car: paste full subject at (0,0) — fills canvas naturally ───────────
+    bg.paste(subject, (0, 0), subject)
 
     result = add_watermark(bg)
     out = io.BytesIO()
@@ -642,7 +622,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "030lower"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "031original"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
