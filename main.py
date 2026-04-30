@@ -492,14 +492,14 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
     clean_alpha = np.where(solid > 0, alpha_arr, 0).astype(np.uint8)
     subject.putalpha(Image.fromarray(clean_alpha))
 
-    # Canvas = original image size (car fills frame naturally, as in best version)
-    # wall_h = detected car bottom → disc sits exactly under wheels
+    # Canvas = original size + top padding to push car visually lower in frame
+    top_pad  = int(sh * 0.22)       # 22% extra wall/ceiling above car
     canvas_w = sw
-    canvas_h = sh
-    wall_h   = crop_bottom          # disc at actual detected car bottom
+    canvas_h = sh + top_pad
+    wall_h   = crop_bottom + top_pad   # disc at actual car bottom, shifted down
     wall_frac = wall_h / canvas_h
 
-    print(f"[composite] sw={sw} sh={sh} crop=({crop_top},{crop_bottom}) wall={wall_h}")
+    print(f"[composite] sw={sw} sh={sh} crop=({crop_top},{crop_bottom}) top_pad={top_pad} wall={wall_h}")
 
     bg = make_showroom(canvas_w, canvas_h, wall_frac=wall_frac)
     draw = ImageDraw.Draw(bg)
@@ -528,7 +528,7 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         draw.line([(ix, iy), (ox, oy)], fill=(60, 100, 210, 100), width=1)
 
     # ── Contact shadow at wall_h ─────────────────────────────────────────────
-    shadow_layer = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
+    shadow_layer = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shadow_layer)
     for i in range(18, 0, -1):
         srw = int(sw * 0.78 * i / 18)
@@ -537,21 +537,21 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         sd.ellipse([(scx - srw//2, py - srh//2),
                     (scx + srw//2, py + srh//2)], fill=(2, 5, 25, sa))
     bg.alpha_composite(shadow_layer.filter(ImageFilter.GaussianBlur(radius=18)))
-    core = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
+    core = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
     cd = ImageDraw.Draw(core)
     cd.ellipse([(scx - int(sw*0.55)//2, py - max(4,int(sw*0.025))//2),
                 (scx + int(sw*0.55)//2, py + max(4,int(sw*0.025))//2)],
                fill=(0, 0, 0, 180))
     bg.alpha_composite(core.filter(ImageFilter.GaussianBlur(radius=6)))
     gw, gh = int(sw * 0.60), max(3, int(sw * 0.018))
-    glow = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
+    glow = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
     gd.ellipse([(scx - gw//2, py - gh//2), (scx + gw//2, py + gh//2)],
                fill=(40, 90, 255, 90))
     bg.alpha_composite(glow.filter(ImageFilter.GaussianBlur(radius=8)))
 
     # ── Reflection ──────────────────────────────────────────────────────────
-    floor_h = sh - wall_h
+    floor_h = canvas_h - wall_h
     refl_h  = min(int((crop_bottom - crop_top) * 0.12), max(0, floor_h - 4))
     if refl_h > 6:
         src_top = max(crop_top, crop_bottom - refl_h)
@@ -560,12 +560,12 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         fade_arr = np.array([int(35 * (1 - i / refl_h)) for i in range(refl_h)], dtype=np.uint8)
         fade_2d  = np.tile(fade_arr[:, np.newaxis], (1, sw))
         refl.putalpha(Image.fromarray(fade_2d, 'L'))
-        refl_canvas = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
+        refl_canvas = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
         refl_canvas.paste(refl.filter(ImageFilter.GaussianBlur(radius=2)), (0, wall_h))
         bg.alpha_composite(refl_canvas)
 
-    # ── Car: paste full subject at (0,0) — fills canvas naturally ───────────
-    bg.paste(subject, (0, 0), subject)
+    # ── Car: pasted with top_pad offset so it appears lower in frame ─────────
+    bg.paste(subject, (0, top_pad), subject)
 
     result = add_watermark(bg)
     out = io.BytesIO()
@@ -622,7 +622,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "031original"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "032toppad"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
