@@ -388,14 +388,13 @@ def draw_floor_text(bg: Image.Image, canvas_w: int, canvas_h: int, wall_h: int) 
 
 
 def make_studio(w: int, h: int) -> Image.Image:
-    """White studio background."""
+    """Clean white/light-grey studio background with subtle vignette."""
     Y, X = np.mgrid[0:h, 0:w].astype(np.float32)
     Xn = (X - w / 2) / (w / 2)
-    Yn = (Y - h * 0.3) / h
-    d = np.clip(np.sqrt(Xn ** 2 + Yn ** 2) / 0.65, 0, 1)
-    v = np.clip(255 - d * 28, 220, 255).astype(np.uint8)
-    b = np.clip(v.astype(np.int32) - (d * 8).astype(np.int32) + 8, 215, 255).astype(np.uint8)
-    pix = np.stack([v, v, b], axis=2)
+    Yn = (Y - h / 2) / (h / 2)
+    d = np.clip(np.sqrt(Xn ** 2 + Yn ** 2) / 1.2, 0, 1)
+    v = np.clip(255 - d * 18, 237, 255).astype(np.uint8)
+    pix = np.stack([v, v, v], axis=2)
     return Image.fromarray(pix, 'RGB')
 
 
@@ -425,7 +424,8 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
 
     subject = Image.open(io.BytesIO(subject_png)).convert('RGBA')
     cat_lower = (category or '').lower()
-    is_auto = not cat_lower or cat_lower == 'general' or 'auto' in cat_lower or cat_lower in ('vehicule', 'masini', 'cars')
+    AUTO_CATS = ('auto', 'masina', 'masini', 'vehicule', 'cars', 'camioane', 'motociclete', 'scutere', 'autoutilitare')
+    is_auto = any(a in cat_lower for a in AUTO_CATS)
 
     if not is_auto:
         # Non-auto: simple studio, keep original size
@@ -543,7 +543,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "033apr28"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "034"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
