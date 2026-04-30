@@ -428,8 +428,7 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
 
     subject = Image.open(io.BytesIO(subject_png)).convert('RGBA')
     cat_lower = (category or '').lower()
-    NON_AUTO = ('imobiliare', 'electronice', 'moda', 'casa', 'sport', 'animale', 'mama', 'joburi', 'servicii', 'agricole', 'constructii')
-    is_auto = not any(n in cat_lower for n in NON_AUTO)
+    is_auto = not cat_lower or cat_lower == 'general' or 'auto' in cat_lower or cat_lower in ('vehicule', 'masini', 'cars', 'moto', 'scutere', 'barci', 'remorci', 'piese', 'rulote')
 
     if not is_auto:
         # Non-auto: clean white studio, compact output
@@ -547,7 +546,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "037"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "038"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
