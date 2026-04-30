@@ -201,20 +201,18 @@ def _grabcut_remove_bg(image_data: bytes) -> bytes:
     return buf.tobytes()
 
 
-def remove_bg_from_bytes(image_data: bytes, use_cheap: bool = False) -> bytes:
-    """Remove background. use_cheap=True skips paid APIs (for non-auto categories)."""
-    if not use_cheap:
-        # Try PhotoRoom first (ML quality, 150/month)
-        try:
-            return remove_bg_photoroom(image_data)
-        except Exception as e:
-            print(f"PhotoRoom failed ({e}), trying remove.bg...")
+def remove_bg_from_bytes(image_data: bytes) -> bytes:
+    # Try PhotoRoom first (ML quality, 150/month)
+    try:
+        return remove_bg_photoroom(image_data)
+    except Exception as e:
+        print(f"PhotoRoom failed ({e}), trying remove.bg...")
 
-        # Try remove.bg (50/month)
-        try:
-            return remove_bg_removebg(image_data)
-        except Exception as e:
-            print(f"remove.bg failed ({e}), trying HF...")
+    # Try remove.bg (50/month)
+    try:
+        return remove_bg_removebg(image_data)
+    except Exception as e:
+        print(f"remove.bg failed ({e}), trying HF...")
 
     # Try HF RMBG (free tier)
     try:
@@ -549,7 +547,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "035"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "036"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
@@ -639,12 +637,9 @@ class Handler(BaseHTTPRequestHandler):
             if not image_url:
                 self._error(400, "image_url required")
                 return
-            cat_lower = (category or '').lower()
-            AUTO_CATS = ('auto', 'masina', 'masini', 'vehicule', 'cars', 'camioane', 'motociclete', 'scutere', 'autoutilitare')
-            is_auto = any(a in cat_lower for a in AUTO_CATS)
             with urllib.request.urlopen(image_url, timeout=20) as r:
                 input_data = r.read()
-            no_bg = remove_bg_from_bytes(input_data, use_cheap=not is_auto)
+            no_bg = remove_bg_from_bytes(input_data)
             final_webp = composite_image(no_bg, category)
             final_url = upload_to_supabase(final_webp, 'image/webp')
             self._json(200, {"ok": True, "url": final_url})
