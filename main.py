@@ -494,10 +494,6 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         sw, sh = int(sw * s), int(sh * s)
         subject = subject.resize((sw, sh), Image.LANCZOS)
 
-    # Detectăm și corectăm înclinarea (poze făcute de sus/jos)
-    subject = level_car(subject)
-    sw, sh = subject.size
-
     wall_h = int(sh * 0.58)
     bg = make_showroom(sw, sh)
     draw = ImageDraw.Draw(bg)
@@ -593,7 +589,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "039"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "040"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
