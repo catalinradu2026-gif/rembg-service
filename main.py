@@ -221,10 +221,11 @@ def remove_bg_from_bytes(image_data: bytes) -> bytes:
 
 # ── Background compositing ────────────────────────────────────────────────────
 
-def make_showroom(w: int, h: int, wall_frac: float = 0.56) -> Image.Image:
+def make_showroom(w: int, h: int) -> Image.Image:
     """zyAI LUXURY showroom — pure black, warm white spotlights, gold accents."""
     from PIL import ImageDraw, ImageFont, ImageFilter
 
+    wall_frac = 0.56
     wall_h = int(h * wall_frac)
 
     # ── Background at half-res ────────────────────────────────────────────────
@@ -267,7 +268,7 @@ def make_showroom(w: int, h: int, wall_frac: float = 0.56) -> Image.Image:
     img = small.resize((w, h), Image.BILINEAR).convert('RGBA')
     draw = ImageDraw.Draw(img)
 
-    # ── Spotlight halos (ceiling fixtures) ───────────────────────────────────
+    # ── Spotlight halos ───────────────────────────────────────────────────────
     halo_xs  = [int(w * 0.50), int(w * 0.15), int(w * 0.85)]
     halo_col = [(200, 220, 255), (130, 100, 240), (130, 100, 240)]
     for hx, hc in zip(halo_xs, halo_col):
@@ -287,25 +288,13 @@ def make_showroom(w: int, h: int, wall_frac: float = 0.56) -> Image.Image:
         draw.line([(side_x, int(wall_h*0.05)), (side_x, wall_h)],
                   fill=(70, 50, 240, 85), width=2)
 
-    # ── Floor: gradient + perspective grid ───────────────────────────────────
-    Y_floor, X_floor = np.mgrid[wall_h:h, 0:w].astype(np.float32)
-    ft = np.clip((Y_floor - wall_h) / max(h - wall_h, 1), 0, 1)
-    Xnf = (X_floor - w / 2) / (w / 2)
-    floor_glow = np.exp(-Xnf**2 * 2.5) * np.exp(-ft * 5) * 22
-    floor_arr = np.zeros((h - wall_h, w, 4), dtype=np.uint8)
-    floor_arr[:, :, 2] = np.clip(floor_glow, 0, 255).astype(np.uint8)
-    floor_arr[:, :, 3] = np.clip(floor_glow * 0.6, 0, 255).astype(np.uint8)
-    floor_layer = Image.fromarray(floor_arr, 'RGBA')
-    img.alpha_composite(floor_layer, (0, wall_h))
-
-    # Perspective floor grid
-    draw2 = ImageDraw.Draw(img)
+    # ── Floor grid blue ───────────────────────────────────────────────────────
     vp = w // 2
     for i in range(1, 9):
         fy = wall_h + int((h - wall_h) * (i / 8)**0.52)
-        draw2.line([(0, fy), (w, fy)], fill=(45, 75, 200, max(5, 44 - i*5)))
+        draw.line([(0, fy), (w, fy)], fill=(45, 75, 200, max(5, 44 - i*5)))
     for xp in range(-130, 131, 16):
-        draw2.line([(vp, wall_h), (vp + int(w*xp/100), h)], fill=(38, 62, 185, 18))
+        draw.line([(vp, wall_h), (vp + int(w*xp/100), h)], fill=(38, 62, 185, 18))
 
     # ── zyAI.ro — LED letters on wall ────────────────────────────────────────
     fs = max(32, int(w * 0.065))
@@ -459,113 +448,45 @@ def composite_image(subject_png: bytes, category: str) -> bytes:
         sw, sh = int(sw * s), int(sh * s)
         subject = subject.resize((sw, sh), Image.LANCZOS)
 
-    import math
-
-    # Detect real car body — robust against PhotoRoom fringes:
-    # 1) alpha > 180 = confidently solid (excludes feathered halo)
-    # 2) keep only the LARGEST connected component (kills speckles below tires)
-    # 3) smooth row counts (tolerates 1-2px alpha gaps)
-    # 4) absolute 4%-of-width threshold (works for both 3/4 and top-down shots)
-    # 5) write cleaned alpha back so fringes don't render at paste time
-    alpha_arr = np.array(subject.getchannel('A'))
-    solid = (alpha_arr > 180).astype(np.uint8) * 255
-    n_cc, labels_cc, stats_cc, _ = cv2.connectedComponentsWithStats(solid, 8)
-    if n_cc > 1:
-        largest = 1 + int(np.argmax(stats_cc[1:, cv2.CC_STAT_AREA]))
-        solid = np.where(labels_cc == largest, 255, 0).astype(np.uint8)
-
-    opaque_counts = np.sum(solid > 0, axis=1).astype(np.int32)
-    if opaque_counts.size >= 5:
-        opaque_counts = np.convolve(opaque_counts, np.ones(5, dtype=np.int32), mode='same') // 5
-
-    abs_thr = max(20, int(sw * 0.04))
-    idxs = np.where(opaque_counts >= abs_thr)[0]
-    if idxs.size:
-        crop_top = int(idxs[0])
-        crop_bottom = int(idxs[-1]) + 1
-    else:
-        crop_top, crop_bottom = 0, sh
-    if crop_bottom <= crop_top:
-        crop_top, crop_bottom = 0, sh
-
-    # Clean alpha so the paste doesn't carry fringe pixels into the showroom
-    clean_alpha = np.where(solid > 0, alpha_arr, 0).astype(np.uint8)
-    subject.putalpha(Image.fromarray(clean_alpha))
-
-    # Canvas = original size + top padding to push car visually lower in frame
-    top_pad  = int(sh * 0.22)       # 22% extra wall/ceiling above car
-    canvas_w = sw
-    canvas_h = sh + top_pad
-    wall_h   = crop_bottom + top_pad   # disc at actual car bottom, shifted down
-    wall_frac = wall_h / canvas_h
-
-    print(f"[composite] sw={sw} sh={sh} crop=({crop_top},{crop_bottom}) top_pad={top_pad} wall={wall_h}")
-
-    bg = make_showroom(canvas_w, canvas_h, wall_frac=wall_frac)
+    wall_h = int(sh * 0.58)
+    bg = make_showroom(sw, sh)
     draw = ImageDraw.Draw(bg)
 
-    # ── Turntable platform disc at wall_h (where wheels touch) ──────────────
-    scx = sw // 2
-    py  = wall_h
+    # ── Turntable platform at floor line ─────────────────────────────────────
+    import math
+    cx, py = sw // 2, wall_h
     plat_w = int(sw * 0.68)
     plat_h = int(plat_w * 0.14)
     for ring in range(4, 0, -1):
         rw, rh = plat_w + ring*10, plat_h + ring*3
-        draw.ellipse([(scx-rw//2, py-rh//2), (scx+rw//2, py+rh//2)],
+        draw.ellipse([(cx-rw//2, py-rh//2), (cx+rw//2, py+rh//2)],
                      fill=(40, 65, 200, 16*ring))
-    draw.ellipse([(scx-plat_w//2, py-plat_h//2),
-                  (scx+plat_w//2, py+plat_h//2)],
+    draw.ellipse([(cx-plat_w//2, py-plat_h//2), (cx+plat_w//2, py+plat_h//2)],
                  fill=(18, 22, 38, 235))
-    draw.arc([(scx-plat_w//2, py-plat_h//2),
-              (scx+plat_w//2, py+plat_h//2)],
+    draw.arc([(cx-plat_w//2, py-plat_h//2), (cx+plat_w//2, py+plat_h//2)],
              start=185, end=355, fill=(80, 125, 255, 170), width=2)
     for deg in range(0, 360, 24):
         rad = math.radians(deg)
-        ix = scx + int((plat_w//2 - 5) * math.cos(rad))
-        iy = py  + int((plat_h//2 - 2) * math.sin(rad))
-        ox = scx + int((plat_w//2 + 1) * math.cos(rad))
-        oy = py  + int((plat_h//2 + 1) * math.sin(rad))
+        ix = cx + int((plat_w//2 - 5) * math.cos(rad))
+        iy = py + int((plat_h//2 - 2) * math.sin(rad))
+        ox = cx + int((plat_w//2 + 1) * math.cos(rad))
+        oy = py + int((plat_h//2 + 1) * math.sin(rad))
         draw.line([(ix, iy), (ox, oy)], fill=(60, 100, 210, 100), width=1)
 
-    # ── Contact shadow at wall_h ─────────────────────────────────────────────
-    shadow_layer = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
-    sd = ImageDraw.Draw(shadow_layer)
-    for i in range(18, 0, -1):
-        srw = int(sw * 0.78 * i / 18)
-        srh = max(4, int(srw * 0.12 * i / 18))
-        sa  = int(140 * (i / 18) ** 1.5)
-        sd.ellipse([(scx - srw//2, py - srh//2),
-                    (scx + srw//2, py + srh//2)], fill=(2, 5, 25, sa))
-    bg.alpha_composite(shadow_layer.filter(ImageFilter.GaussianBlur(radius=18)))
-    core = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
-    cd = ImageDraw.Draw(core)
-    cd.ellipse([(scx - int(sw*0.55)//2, py - max(4,int(sw*0.025))//2),
-                (scx + int(sw*0.55)//2, py + max(4,int(sw*0.025))//2)],
-               fill=(0, 0, 0, 180))
-    bg.alpha_composite(core.filter(ImageFilter.GaussianBlur(radius=6)))
-    gw, gh = int(sw * 0.60), max(3, int(sw * 0.018))
-    glow = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow)
-    gd.ellipse([(scx - gw//2, py - gh//2), (scx + gw//2, py + gh//2)],
-               fill=(40, 90, 255, 90))
-    bg.alpha_composite(glow.filter(ImageFilter.GaussianBlur(radius=8)))
-
-    # ── Reflection ──────────────────────────────────────────────────────────
-    floor_h = canvas_h - wall_h
-    refl_h  = min(int((crop_bottom - crop_top) * 0.12), max(0, floor_h - 4))
+    # ── Reflection ────────────────────────────────────────────────────────────
+    refl_h = min(int(sh * 0.20), sh - wall_h - 4)
     if refl_h > 6:
-        src_top = max(crop_top, crop_bottom - refl_h)
-        refl = subject.crop((0, src_top, sw, crop_bottom)).transpose(Image.FLIP_TOP_BOTTOM)
-        refl = refl.resize((sw, refl_h), Image.LANCZOS)
-        fade_arr = np.array([int(35 * (1 - i / refl_h)) for i in range(refl_h)], dtype=np.uint8)
-        fade_2d  = np.tile(fade_arr[:, np.newaxis], (1, sw))
-        refl.putalpha(Image.fromarray(fade_2d, 'L'))
-        refl_canvas = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
-        refl_canvas.paste(refl.filter(ImageFilter.GaussianBlur(radius=2)), (0, wall_h))
-        bg.alpha_composite(refl_canvas)
+        refl = subject.transpose(Image.FLIP_TOP_BOTTOM)
+        fade_arr = np.zeros((sh,), dtype=np.uint8)
+        for fy in range(refl_h):
+            fade_arr[sh - refl_h + fy] = int(50 * (1 - fy / refl_h))
+        fade_2d = np.tile(fade_arr[:, np.newaxis], (1, sw))
+        refl_rgba = refl.copy()
+        refl_rgba.putalpha(Image.fromarray(fade_2d, 'L'))
+        bg.alpha_composite(refl_rgba.filter(ImageFilter.GaussianBlur(radius=3)))
 
-    # ── Car: pasted with top_pad offset so it appears lower in frame ─────────
-    bg.paste(subject, (0, top_pad), subject)
+    # ── Car fills canvas (floor visible through car transparency) ─────────────
+    bg.paste(subject, (0, 0), subject)
 
     result = add_watermark(bg)
     out = io.BytesIO()
@@ -622,7 +543,7 @@ class Handler(BaseHTTPRequestHandler):
             has_pr = bool(os.environ.get("PHOTOROOM_KEY", ""))
             has_rbg = bool(os.environ.get("REMOVEBG_KEY", ""))
             model = ("photoroom+" if has_pr else "") + ("removebg+" if has_rbg else "") + "hf+grabcut"
-            body = json.dumps({"ok": True, "model": model, "v": "032toppad"}).encode()
+            body = json.dumps({"ok": True, "model": model, "v": "033apr28"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_cors()
